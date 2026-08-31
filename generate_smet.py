@@ -110,45 +110,27 @@ def load_imo_stations() -> pd.DataFrame:
         
         df = pd.DataFrame(stations_list)
         print("API returned %d stations" % len(df))
+        print("Fields: %s" % str(list(df.columns)))
         
-        if len(df) > 0:
-            print("Sample fields: %s" % str(list(df.columns)[:10]))
+        # Map the actual API field names
+        # API uses: station (ID), name, lat, lon, ele (elevation)
+        df = df.rename(columns={
+            "station": "id",
+            "ele": "elev",
+        })
         
-        possible_lat = ["latitude", "lat", "breidd_y", "N"]
-        possible_lon = ["longitude", "lon", "lengd_x", "E"]
-        possible_elev = ["altitude", "elev", "h_stod", "elevation"]
-        possible_id = ["id", "stod", "station_id"]
-        possible_name = ["name", "nafn", "station_name"]
-        
-        lat_field = next((f for f in possible_lat if f in df.columns), None)
-        lon_field = next((f for f in possible_lon if f in df.columns), None)
-        elev_field = next((f for f in possible_elev if f in df.columns), None)
-        id_field = next((f for f in possible_id if f in df.columns), None)
-        name_field = next((f for f in possible_name if f in df.columns), None)
-        
-        if not all([lat_field, lon_field, id_field]):
-            print("Could not map required fields. Got: %s" % str(list(df.columns)))
-            return pd.DataFrame()
-        
-        print("Mapped: id=%s, lat=%s, lon=%s, elev=%s, name=%s" % (id_field, lat_field, lon_field, elev_field, name_field))
-        
-        keep_cols = [id_field, lat_field, lon_field, name_field]
-        if elev_field:
-            keep_cols.append(elev_field)
+        # Keep only essential columns
+        keep_cols = ["id", "lat", "lon", "name"]
+        if "elev" in df.columns:
+            keep_cols.append("elev")
         
         df = df[[c for c in keep_cols if c in df.columns]].copy()
         
-        df = df.rename(columns={
-            id_field: "id",
-            lat_field: "lat",
-            lon_field: "lon",
-            name_field: "name",
-        })
-        if elev_field:
-            df = df.rename(columns={elev_field: "elev"})
-        else:
+        # Add elev if missing
+        if "elev" not in df.columns:
             df["elev"] = np.nan
         
+        # Convert to numeric
         df["id"] = pd.to_numeric(df["id"], errors="coerce")
         df["lat"] = pd.to_numeric(df["lat"], errors="coerce")
         df["lon"] = pd.to_numeric(df["lon"], errors="coerce")
