@@ -4,6 +4,8 @@ Generate SMET files for SNOWPACK modeling in Iceland.
 Pulls meteorological data from IMO (Icelandic Met Office) stations near avalanche sites,
 then writes SMET 1.1 ASCII format files suitable for SNOWPACK input.
 
+Uses the api.vedur.is/weather/ endpoints.
+
 Usage:
     python generate_smet.py
 """
@@ -16,21 +18,18 @@ import numpy as np
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, List, Dict, Tuple
-from haversine import haversine
+from math import radians, sin, cos, sqrt, atan2
 
 # =============================================================================
 # CONFIG
 # =============================================================================
 
-# Output directory
 OUTPUT_DIR = Path("smet_files")
 OUTPUT_DIR.mkdir(exist_ok=True)
 
-# IMO API endpoints
-IMO_STATIONS_URL = "https://vi-api.vedur.is/observations/list_stations"
-IMO_AUTO_HOUR_URL = "https://vi-api.vedur.is/observations/auto_hour"
+IMO_STATIONS_URL = "https://api.vedur.is/weather/stations"
+IMO_AUTO_HOUR_URL = "https://api.vedur.is/weather/observations/aws/hour"
 
-# Avalanche sites (station_id, name, latitude, longitude, altitude)
 AVALANCHE_SITES = [
     (1, "vestfj", 66.076302, -23.158573, 420, "Ísafjörður, Steiniðjugil"),
     (2, "nord", 66.061745, -23.485704, 610, "Flateyri, Miðhryggsgil"),
@@ -38,35 +37,49 @@ AVALANCHE_SITES = [
     (4, "tindaöxl", 66.063942, -18.633444, 380, "Ólafsfjörður, Tindaöxl"),
 ]
 
-# Date range
 START_DATE = datetime(2025, 10, 21)
 END_DATE = datetime(2026, 8, 13)
 
-# Search parameters
 MAX_RADIUS_KM = 30.0
 MAX_STATIONS = 9
 
-# EPSG:32628 (UTM zone 28N) conversion - simplified approximation
-def latlon_to_utm28(lat: float, lon: float) -> Tuple[float, float]:
-    """Approximate conversion from lat/lon to UTM zone 28N (false easting/northing)."""
-    # This is a rough approximation; for production, use pyproj
-    easting = (lon + 180) * 110567  # meters per degree at equator
-    northing = (lat + 90) * 110575   # meters per degree
-    return easting, northing
+# =============================================================================
+# DISTANCE CALCULATION
+# =============================================================================
+
+def great_circle_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Calculate distance between two points on Earth in km using Haversine formula."""
+    R = 6371.0
+    
+    lat1_rad = radians(lat1)
+    lon1_rad = radians(lon1)
+    lat2_rad = radians(lat2)
+    lon2_rad = radians(lon2)
+    
+    dlat = lat2_rad - lat1_rad
+    dlon = lon2_rad - lon1_rad
+    
+    a = sin(dlat / 2)**2 + cos(lat1_rad) * cos(lat2_rad) * sin(dlon / 2)**2
+    c = 2 * atan2(sqrt(a), sqrt(1 - a))
+    
+    return R * c
 
 # =============================================================================
 # HTTP HELPERS
 # =============================================================================
 
-def get_json(url: str, params: dict, timeout: int = 10) -> List | Dict:
+def get_json(url: str, params: dict, timeout: int = 10):
     """Fetch JSON from URL with error handling."""
     try:
         r = requests.get(url, params=params, timeout=timeout)
         r.raise_for_status()
         return r.json()
     except requests.RequestException as e:
-        print(f"❌ HTTP error fetching {url}: {e}")
-        return [] if isinstance(r.json(), list) else {}
+        print("HTTP error fetching %s: %s" % (url, str(e)))
+        return [] if "list" in url.lower() else {}
+    except Exception as e:
+        print("Error parsing JSON: %s" % str(e))
+        return [] if "list" in url.lower() else {}
 
 # =============================================================================
 # STATION LOADING
@@ -74,43 +87,83 @@ def get_json(url: str, params: dict, timeout: int = 10) -> List | Dict:
 
 def load_imo_stations() -> pd.DataFrame:
     """Load all IMO stations from the API."""
-    print("📡 Fetching IMO station list...")
-    params = {"limit": 10000, "station_type": "all"}
+    print("Fetching IMO station list from api.vedur.is...")
+    
     try:
-        data = get_json(IMO_STATIONS_URL, params)
+        data = get_json(IMO_STATIONS_URL, {})
+        
         if not data:
-            print("❌ No station data returned")
+            print("No station data returned")
             return pd.DataFrame()
         
-        df = pd.DataFrame(data)
+        if isinstance(data, dict) and "results" in data:
+            stations_list = data["results"]
+        elif isinstance(data, list):
+            stations_list = data
+        else:
+            print("Unexpected API response format: %s" % str(type(data)))
+            return pd.DataFrame()
         
-        # Rename columns to match expected format
-        rename_map = {
-            "stod": "id",
-            "breidd_y": "lat",
-            "lengd_x": "lon",
-            "h_stod": "elev",
-            "nafn": "name",
-        }
-        df = df.rename(columns=rename_map)
+        if not stations_list:
+            print("Empty station list returned")
+            return pd.DataFrame()
         
-        # Keep only essential columns
-        df = df[["id", "lat", "lon", "elev", "name"]].copy()
+        df = pd.DataFrame(stations_list)
+        print("API returned %d stations" % len(df))
         
-        # Convert to numeric and drop rows with missing coordinates
+        if len(df) > 0:
+            print("Sample fields: %s" % str(list(df.columns)[:10]))
+        
+        possible_lat = ["latitude", "lat", "breidd_y", "N"]
+        possible_lon = ["longitude", "lon", "lengd_x", "E"]
+        possible_elev = ["altitude", "elev", "h_stod", "elevation"]
+        possible_id = ["id", "stod", "station_id"]
+        possible_name = ["name", "nafn", "station_name"]
+        
+        lat_field = next((f for f in possible_lat if f in df.columns), None)
+        lon_field = next((f for f in possible_lon if f in df.columns), None)
+        elev_field = next((f for f in possible_elev if f in df.columns), None)
+        id_field = next((f for f in possible_id if f in df.columns), None)
+        name_field = next((f for f in possible_name if f in df.columns), None)
+        
+        if not all([lat_field, lon_field, id_field]):
+            print("Could not map required fields. Got: %s" % str(list(df.columns)))
+            return pd.DataFrame()
+        
+        print("Mapped: id=%s, lat=%s, lon=%s, elev=%s, name=%s" % (id_field, lat_field, lon_field, elev_field, name_field))
+        
+        keep_cols = [id_field, lat_field, lon_field, name_field]
+        if elev_field:
+            keep_cols.append(elev_field)
+        
+        df = df[[c for c in keep_cols if c in df.columns]].copy()
+        
+        df = df.rename(columns={
+            id_field: "id",
+            lat_field: "lat",
+            lon_field: "lon",
+            name_field: "name",
+        })
+        if elev_field:
+            df = df.rename(columns={elev_field: "elev"})
+        else:
+            df["elev"] = np.nan
+        
         df["id"] = pd.to_numeric(df["id"], errors="coerce")
         df["lat"] = pd.to_numeric(df["lat"], errors="coerce")
         df["lon"] = pd.to_numeric(df["lon"], errors="coerce")
         df["elev"] = pd.to_numeric(df["elev"], errors="coerce")
         
         df = df.dropna(subset=["lat", "lon", "id"])
-        df = df[df["id"] != 0]  # Remove dummy entries
+        df = df[df["id"] != 0]
         
-        print(f"✅ Loaded {len(df)} stations")
+        print("Loaded %d valid stations" % len(df))
         return df
     
     except Exception as e:
-        print(f"❌ Error loading stations: {e}")
+        print("Error loading stations: %s" % str(e))
+        import traceback
+        traceback.print_exc()
         return pd.DataFrame()
 
 # =============================================================================
@@ -122,13 +175,11 @@ def find_nearest_stations(site_lat: float, site_lon: float, all_stations: pd.Dat
     """Find nearest IMO stations within max_km of a site."""
     df = all_stations.copy()
     
-    # Calculate distance
     df["dist_km"] = df.apply(
-        lambda row: haversine((site_lat, site_lon), (row["lat"], row["lon"])),
+        lambda row: great_circle_distance(site_lat, site_lon, row["lat"], row["lon"]),
         axis=1
     )
     
-    # Filter by distance and sort
     within = df[df["dist_km"] <= max_km].sort_values("dist_km")
     
     return within.head(max_count).reset_index(drop=True)
@@ -141,16 +192,26 @@ def fetch_auto_hour_data(station_id: int, day_from: datetime, day_to: datetime) 
     """Fetch hourly auto station data from IMO API."""
     params = {
         "station_id": int(station_id),
+        "parameters": "all",
+        "format": "json",
         "day_from": day_from.strftime("%Y-%m-%d"),
         "day_to": day_to.strftime("%Y-%m-%d"),
-        "locale": "en",
-        "format": "json"
     }
     try:
         data = get_json(IMO_AUTO_HOUR_URL, params, timeout=15)
-        return data if isinstance(data, list) else []
+        
+        if isinstance(data, dict):
+            if "results" in data:
+                return data["results"] if isinstance(data["results"], list) else []
+            else:
+                return []
+        elif isinstance(data, list):
+            return data
+        else:
+            return []
+    
     except Exception as e:
-        print(f"   ⚠️ Failed to fetch station {station_id}: {e}")
+        print("Failed to fetch station %d: %s" % (station_id, str(e)))
         return []
 
 # =============================================================================
@@ -167,10 +228,17 @@ def build_hourly_series(entries: List[Dict], key: str) -> pd.Series:
     
     for entry in entries:
         try:
-            ts = pd.to_datetime(entry.get("timi"))
+            ts = None
+            for ts_field in ["timestamp", "timi", "time", "datetime"]:
+                if ts_field in entry and entry[ts_field]:
+                    ts = pd.to_datetime(entry[ts_field])
+                    break
+            
+            if ts is None:
+                continue
+            
             val = entry.get(key)
             
-            # Convert to float, handle missing/empty
             if val is None or val == "":
                 val = np.nan
             else:
@@ -193,47 +261,26 @@ def celsius_to_kelvin(temp_c: float) -> float:
         return np.nan
     return temp_c + 273.15
 
-def kelvin_to_celsius(temp_k: float) -> float:
-    """Convert Kelvin to Celsius."""
-    if np.isnan(temp_k):
-        return np.nan
-    return temp_k - 273.15
-
-def compute_rh_from_dewpoint(t_k: float, td_k: float) -> float:
-    """Compute relative humidity from temperature and dew point (both in Kelvin)."""
-    if np.isnan(t_k) or np.isnan(td_k):
-        return np.nan
-    
-    t_c = kelvin_to_celsius(t_k)
-    td_c = kelvin_to_celsius(td_k)
-    
-    # Magnus formula approximation
-    try:
-        alpha = ((17.27 * td_c) / (237.7 + td_c)) - ((17.27 * t_c) / (237.7 + t_c))
-        rh = 100 * np.exp(alpha)
-        return np.clip(rh / 100.0, 0.0, 1.0)  # Return as fraction 0-1
-    except Exception:
-        return np.nan
-
 # =============================================================================
 # SMET FILE GENERATION
 # =============================================================================
 
+def latlon_to_utm28(lat: float, lon: float) -> Tuple[float, float]:
+    """Approximate conversion from lat/lon to UTM zone 28N."""
+    easting = (lon + 180) * 110567
+    northing = (lat + 90) * 110575
+    return easting, northing
+
 def generate_smet_file(site_id: int, site_name: str, site_lat: float, site_lon: float, 
                       site_elev: float, site_desc: str, nearest_stations: pd.DataFrame,
                       all_stations: pd.DataFrame) -> Optional[str]:
-    """
-    Generate a complete SMET file for one site.
-    
-    Returns the output filename on success, None on failure.
-    """
-    print(f"\n🎯 Processing {site_name} ({site_desc})...")
+    """Generate a complete SMET file for one site."""
+    print("\nProcessing %s (%s)..." % (site_name, site_desc))
     
     if nearest_stations.empty:
-        print(f"   ❌ No nearby stations found")
+        print("  No nearby stations found")
         return None
     
-    # Try to fetch data from the nearest station(s)
     hourly_data = None
     chosen_station = None
     
@@ -242,92 +289,100 @@ def generate_smet_file(site_id: int, site_name: str, site_lat: float, site_lon: 
         station_name = station["name"]
         dist_km = station["dist_km"]
         
-        print(f"   📍 Trying station {sid} ({station_name}, {dist_km:.1f} km away)...")
+        print("  Trying station %d (%s, %.1f km away)..." % (sid, station_name, dist_km))
         
         entries = fetch_auto_hour_data(sid, START_DATE, END_DATE)
         
         if not entries:
-            print(f"      ⚠️ No data returned")
+            print("    No data returned")
             continue
         
-        # Try to build series from this station
         try:
-            t_series = build_hourly_series(entries, "t")
-            f_series = build_hourly_series(entries, "f")
+            t_series = build_hourly_series(entries, "T")
+            if t_series.empty:
+                t_series = build_hourly_series(entries, "t")
+            
+            f_series = build_hourly_series(entries, "F")
+            if f_series.empty:
+                f_series = build_hourly_series(entries, "f")
             
             if t_series.empty or f_series.empty:
-                print(f"      ⚠️ Missing temperature or wind data")
+                print("    Missing temperature or wind data")
                 continue
             
-            # We have usable data
             hourly_data = entries
             chosen_station = station
-            print(f"      ✅ Got {len(entries)} hourly records")
+            print("    Got %d hourly records" % len(entries))
             break
         
         except Exception as e:
-            print(f"      ❌ Error processing: {e}")
+            print("    Error processing: %s" % str(e))
             continue
     
     if hourly_data is None or chosen_station is None:
-        print(f"   ❌ Could not fetch valid data from any station")
+        print("  Could not fetch valid data from any station")
         return None
     
-    # Build the data frame
     try:
         df = _build_smet_dataframe(site_id, hourly_data, chosen_station)
         if df is None or df.empty:
-            print(f"   ❌ Failed to build data frame")
+            print("  Failed to build data frame")
             return None
         
-        # Write SMET file
-        output_file = OUTPUT_DIR / f"{site_name}_smet.txt"
+        output_file = OUTPUT_DIR / ("%s_smet.txt" % site_name)
         _write_smet_file(output_file, site_id, site_name, site_lat, site_lon, site_elev,
                         chosen_station, df)
         
-        print(f"   💾 Wrote {output_file}")
+        print("  Wrote %s" % output_file)
         return str(output_file)
     
     except Exception as e:
-        print(f"   ❌ Error building SMET: {e}")
+        print("  Error building SMET: %s" % str(e))
+        import traceback
+        traceback.print_exc()
         return None
 
 def _build_smet_dataframe(site_id: int, entries: List[Dict], station: pd.Series) -> Optional[pd.DataFrame]:
     """Build a DataFrame with SMET variables from IMO hourly data."""
     
-    # Build series for each variable
-    t_series = build_hourly_series(entries, "t")  # Temperature in Celsius from IMO
-    f_series = build_hourly_series(entries, "f")  # Wind speed m/s
-    d_series = build_hourly_series(entries, "d")  # Wind direction degrees
-    r_series = build_hourly_series(entries, "r")  # Precipitation mm
+    t_series = build_hourly_series(entries, "T")
+    if t_series.empty:
+        t_series = build_hourly_series(entries, "t")
+    
+    f_series = build_hourly_series(entries, "F")
+    if f_series.empty:
+        f_series = build_hourly_series(entries, "f")
+    
+    d_series = build_hourly_series(entries, "D")
+    if d_series.empty:
+        d_series = build_hourly_series(entries, "d")
+    
+    r_series = build_hourly_series(entries, "R")
+    if r_series.empty:
+        r_series = build_hourly_series(entries, "r")
     
     if t_series.empty:
         return None
     
-    # Create hourly index
     ts_index = pd.date_range(start=START_DATE, end=END_DATE, freq="1h")
     
-    # Reindex all series to hourly grid with forward fill
     t = t_series.reindex(ts_index, method="nearest", tolerance=pd.Timedelta("30min"))
     f = f_series.reindex(ts_index, method="nearest", tolerance=pd.Timedelta("30min"))
     d = d_series.reindex(ts_index, method="nearest", tolerance=pd.Timedelta("30min"))
     r = r_series.reindex(ts_index, method="nearest", tolerance=pd.Timedelta("30min"))
     
-    # Convert to numpy arrays and handle nodata
     ta = np.where(t.notna(), celsius_to_kelvin(t.values), -999.0)
     vw = np.where(f.notna(), f.values, -999.0)
     dw = np.where(d.notna(), d.values, -999.0)
     psum = np.where(r.notna(), r.values, -999.0)
     
-    # Derived/fallback variables
-    tsg = np.full_like(ta, 273.15)  # Ground temp = constant (or use TA)
-    vw_max = vw * 1.3  # Rough gust estimate
-    rh = np.full_like(ta, 0.9)  # Placeholder relative humidity
-    p = np.full_like(ta, 101325.0)  # Placeholder pressure (Pa)
-    iswr = np.zeros_like(ta)  # Shortwave radiation (to be filled)
-    ilwr = np.full_like(ta, 200.0)  # Longwave radiation placeholder
+    tsg = np.full_like(ta, 273.15)
+    vw_max = np.where(vw != -999.0, vw * 1.3, -999.0)
+    rh = np.full_like(ta, 0.9)
+    p = np.full_like(ta, 101325.0)
+    iswr = np.zeros_like(ta)
+    ilwr = np.full_like(ta, 200.0)
     
-    # Build DataFrame
     df = pd.DataFrame({
         "timestamp": ts_index,
         "station_id": site_id,
@@ -349,42 +404,39 @@ def _write_smet_file(output_path: Path, site_id: int, site_name: str, site_lat: 
                     site_lon: float, site_elev: float, station: pd.Series, df: pd.DataFrame):
     """Write a SMET 1.1 ASCII file."""
     
-    # Compute UTM coordinates (approximate)
     easting, northing = latlon_to_utm28(site_lat, site_lon)
     
     with open(output_path, "w") as f:
-        # Header
         f.write("SMET 1.1 ASCII\n")
         f.write("[HEADER]\n")
-        f.write(f"station_id       = {site_id}\n")
-        f.write(f"station_name     = {site_name}\n")
-        f.write(f"easting          = {easting:.3f}\n")
-        f.write(f"northing         = {northing:.3f}\n")
-        f.write(f"epsg             = 32628\n")
-        f.write(f"altitude         = {site_elev:.1f}\n")
-        f.write(f"latitude         = {site_lat:.6f}\n")
-        f.write(f"longitude        = {site_lon:.6f}\n")
-        f.write(f"nodata           = -999\n")
-        f.write(f"fields = station_id timestamp TA TSG VW VW_MAX DW RH P PSUM ISWR ILWR\n")
+        f.write("station_id       = %d\n" % site_id)
+        f.write("station_name     = %s\n" % site_name)
+        f.write("easting          = %.3f\n" % easting)
+        f.write("northing         = %.3f\n" % northing)
+        f.write("epsg             = 32628\n")
+        f.write("altitude         = %.1f\n" % site_elev)
+        f.write("latitude         = %.6f\n" % site_lat)
+        f.write("longitude        = %.6f\n" % site_lon)
+        f.write("nodata           = -999\n")
+        f.write("fields = station_id timestamp TA TSG VW VW_MAX DW RH P PSUM ISWR ILWR\n")
         f.write("[DATA]\n")
         
-        # Data rows
         for _, row in df.iterrows():
             timestamp = row["timestamp"].strftime("%Y-%m-%dT%H:%M:%S")
-            f.write(
-                f"{row['station_id']:.1f}\t"
-                f"{timestamp}\t"
-                f"{row['TA']:.3f}\t"
-                f"{row['TSG']:.3f}\t"
-                f"{row['VW']:.3f}\t"
-                f"{row['VW_MAX']:.3f}\t"
-                f"{row['DW']:.3f}\t"
-                f"{row['RH']:.3f}\t"
-                f"{row['P']:.1f}\t"
-                f"{row['PSUM']:.3f}\t"
-                f"{row['ISWR']:.3f}\t"
-                f"{row['ILWR']:.3f}\n"
-            )
+            f.write("%d\t%s\t%.3f\t%.3f\t%.3f\t%.3f\t%.3f\t%.3f\t%.1f\t%.3f\t%.3f\t%.3f\n" % (
+                int(row['station_id']),
+                timestamp,
+                row['TA'],
+                row['TSG'],
+                row['VW'],
+                row['VW_MAX'],
+                row['DW'],
+                row['RH'],
+                row['P'],
+                row['PSUM'],
+                row['ISWR'],
+                row['ILWR']
+            ))
 
 # =============================================================================
 # MAIN
@@ -395,46 +447,41 @@ def main():
     print("SMET Generator for SNOWPACK - Iceland Avalanche Sites")
     print("=" * 70)
     
-    # Load IMO stations
     all_stations = load_imo_stations()
     if all_stations.empty:
-        print("❌ Failed to load stations. Exiting.")
+        print("Failed to load stations. Exiting.")
         return
     
-    # Process each avalanche site
     results = []
     for site_id, site_name, site_lat, site_lon, site_elev, site_desc in AVALANCHE_SITES:
-        # Find nearest stations
         nearest = find_nearest_stations(site_lat, site_lon, all_stations)
         
         if nearest.empty:
-            print(f"\n❌ No stations within {MAX_RADIUS_KM} km of {site_name}")
+            print("\nNo stations within %.1f km of %s" % (MAX_RADIUS_KM, site_name))
             continue
         
-        print(f"\n📍 Nearest stations to {site_name}:")
+        print("\nNearest stations to %s:" % site_name)
         for _, s in nearest.head(3).iterrows():
-            print(f"   - {s['name']} (ID {s['id']}, {s['dist_km']:.1f} km)")
+            print("  - %s (ID %d, %.1f km)" % (s['name'], int(s['id']), s['dist_km']))
         
-        # Generate SMET file
         output_file = generate_smet_file(site_id, site_name, site_lat, site_lon,
                                         site_elev, site_desc, nearest, all_stations)
         
         if output_file:
             results.append((site_name, output_file))
     
-    # Summary
     print("\n" + "=" * 70)
     print("SUMMARY")
     print("=" * 70)
     
     if results:
-        print(f"✅ Successfully generated {len(results)} SMET files:")
+        print("Successfully generated %d SMET files:" % len(results))
         for name, path in results:
-            print(f"   - {name}: {path}")
+            print("  - %s: %s" % (name, path))
     else:
-        print("❌ No SMET files were generated")
+        print("No SMET files were generated")
     
-    print(f"\nOutput directory: {OUTPUT_DIR.resolve()}")
+    print("\nOutput directory: %s" % OUTPUT_DIR.resolve())
 
 if __name__ == "__main__":
     main()
