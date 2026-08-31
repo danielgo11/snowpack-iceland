@@ -11,14 +11,13 @@ Usage:
 import requests
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, List, Dict, Tuple
 
 OUTPUT_DIR = Path("snow_heights")
 OUTPUT_DIR.mkdir(exist_ok=True)
 
-SNOWSENSE_SENSORS_URL = "https://dev.snowsense.is/v1/sensors"
 SNOWSENSE_DATA_URL = "https://dev.snowsense.is/v1/sensors/{sensor_id}/data"
 
 SENSORS = [
@@ -28,8 +27,8 @@ SENSORS = [
     (204, "Ólafsfjörður Tindaöxl", 66.063942, -18.633444, 380),
 ]
 
-START_DATE = datetime(2025, 10, 21, 0, 0, 0)
-END_DATE = datetime(2026, 8, 13, 23, 59, 59)
+START_DATE = datetime(2025, 10, 21, 0, 0, 0, tzinfo=timezone.utc)
+END_DATE = datetime(2026, 8, 13, 23, 59, 59, tzinfo=timezone.utc)
 
 MAX_HS_CM = 500
 MAX_POINTS_PER_FETCH = 5000
@@ -51,15 +50,6 @@ def get_json(url: str, params: dict, timeout: int = 30):
         print("Error parsing JSON: %s" % str(e))
         return None
 
-def list_all_sensors() -> Dict:
-    """List all available SM4 sensors in Iceland."""
-    print("Fetching list of all sensors...")
-    data = get_json(SNOWSENSE_SENSORS_URL, {})
-    if data:
-        print("Found %d sensors" % len(data))
-        return data
-    return {}
-
 def fetch_sensor_data(sensor_id: int, from_dt: datetime, to_dt: datetime) -> List[Dict]:
     """
     Fetch snow height data for a sensor between dates.
@@ -72,8 +62,8 @@ def fetch_sensor_data(sensor_id: int, from_dt: datetime, to_dt: datetime) -> Lis
     
     while current_from < to_dt:
         params = {
-            "from": current_from.isoformat() + "Z",
-            "to": to_dt.isoformat() + "Z",
+            "from": current_from.isoformat(),
+            "to": to_dt.isoformat(),
             "take": MAX_POINTS_PER_FETCH,
             "order": "asc",
             "period": "TenMinute",
@@ -103,7 +93,7 @@ def fetch_sensor_data(sensor_id: int, from_dt: datetime, to_dt: datetime) -> Lis
         if len(data_list) < MAX_POINTS_PER_FETCH:
             break
         
-        last_time = pd.to_datetime(data_list[-1].get("time"))
+        last_time = pd.to_datetime(data_list[-1].get("createdAt"))
         current_from = last_time + timedelta(minutes=10)
     
     print("    Total %d points fetched" % len(all_data))
@@ -113,7 +103,8 @@ def process_sensor_data(sensor_id: int, sensor_name: str, sensor_lat: float,
                        sensor_lon: float, sensor_elev: float, raw_data: List[Dict]) -> Tuple[Optional[pd.DataFrame], Dict]:
     """
     Process raw sensor data:
-    - Extract HS values
+    - Extract HS values (laserSnowdepthCm)
+    - Extract top temperature (first value in temperature array)
     - Validate (remove > 500 cm)
     - Resample to hourly
     - Handle gaps
@@ -140,16 +131,17 @@ def process_sensor_data(sensor_id: int, sensor_name: str, sensor_lat: float,
     
     times = []
     values = []
+    temps = []
     
     for entry in raw_data:
         try:
-            ts_str = entry.get("time")
+            ts_str = entry.get("createdAt")
             if not ts_str:
                 continue
             
             ts = pd.to_datetime(ts_str)
             
-            hs = entry.get("snowHeight")
+            hs = entry.get("laserSnowdepthCm")
             if hs is None:
                 continue
             
@@ -159,8 +151,17 @@ def process_sensor_data(sensor_id: int, sensor_name: str, sensor_lat: float,
                 report["filtered_points"] += 1
                 continue
             
+            temp_array = entry.get("temperature")
+            top_temp = None
+            if temp_array and isinstance(temp_array, list) and len(temp_array) > 0:
+                try:
+                    top_temp = float(temp_array[0])
+                except (ValueError, TypeError):
+                    top_temp = None
+            
             times.append(ts)
             values.append(hs_val)
+            temps.append(top_temp)
         
         except Exception:
             continue
@@ -174,19 +175,25 @@ def process_sensor_data(sensor_id: int, sensor_name: str, sensor_lat: float,
     df_raw = pd.DataFrame({
         "time": times,
         "hs": values,
+        "temp": temps,
     })
     df_raw = df_raw.sort_values("time").reset_index(drop=True)
+    
+    if df_raw["time"].duplicated().any():
+        print("  Found duplicate timestamps, aggregating...")
+        df_raw = df_raw.groupby("time").agg({"hs": "mean", "temp": "mean"}).reset_index()
+        print("  Aggregated to %d unique timestamps" % len(df_raw))
     
     report["start_date"] = df_raw["time"].min()
     report["end_date"] = df_raw["time"].max()
     
     print("  Data range: %s to %s" % (report["start_date"], report["end_date"]))
     
-    hourly_index = pd.date_range(start=START_DATE, end=END_DATE, freq="1h")
+    hourly_index = pd.date_range(start=START_DATE, end=END_DATE, freq="1h", tz=timezone.utc)
     
     df_hourly = df_raw.set_index("time").reindex(hourly_index, method="nearest", tolerance=pd.Timedelta("5min"))
     df_hourly = df_hourly.reset_index()
-    df_hourly.columns = ["time", "hs"]
+    df_hourly.columns = ["time", "hs", "temp"]
     
     print("  Resampled to hourly: %d values" % df_hourly["hs"].notna().sum())
     
@@ -238,59 +245,43 @@ def fill_gaps(df: pd.DataFrame, report: Dict) -> pd.DataFrame:
     """
     df = df.copy()
     
-    df["hs_filled"] = df["hs"].copy()
-    
-    current_gap_start = None
-    gap_hours = 0
-    
-    for i in range(len(df)):
-        is_valid = df.loc[i, "hs"] != -999.0
-        
-        if not is_valid:
-            if current_gap_start is None:
-                current_gap_start = i
-            gap_hours += 1
-        else:
-            if current_gap_start is not None:
-                gap_end = i
-                gap_duration_hours = gap_hours
-                
-                if gap_duration_hours <= INTERPOLATE_GAP_HOURS:
-                    df.loc[current_gap_start:gap_end, "hs_filled"] = np.nan
-                    df.loc[current_gap_start:gap_end, "hs_filled"] = df.loc[current_gap_start:gap_end, "hs_filled"].interpolate()
-                    df.loc[current_gap_start:gap_end, "status"] = "interpolated"
-                    report["gaps_interpolated"] += 1
-                
-                elif gap_duration_hours <= (FORWARD_FILL_GAP_DAYS * 24):
-                    last_val = df.loc[current_gap_start - 1, "hs"]
-                    df.loc[current_gap_start:gap_end-1, "hs_filled"] = last_val
-                    df.loc[current_gap_start:gap_end-1, "status"] = "forward_fill"
+    i = 0
+    while i < len(df):
+        if df.loc[i, "hs"] == -999.0:
+            gap_start = i
+            gap_length = 0
+            
+            while i < len(df) and df.loc[i, "hs"] == -999.0:
+                gap_length += 1
+                i += 1
+            
+            gap_end = i
+            gap_hours = gap_length
+            
+            if gap_hours <= INTERPOLATE_GAP_HOURS:
+                df.loc[gap_start:gap_end-1, "hs"] = np.nan
+                df.loc[gap_start:gap_end-1, "hs"] = df.loc[gap_start:gap_end-1, "hs"].interpolate()
+                df.loc[gap_start:gap_end-1, "status"] = "interpolated"
+                report["gaps_interpolated"] += 1
+            
+            elif gap_hours <= (FORWARD_FILL_GAP_DAYS * 24):
+                if gap_start > 0:
+                    last_val = df.loc[gap_start - 1, "hs"]
+                    df.loc[gap_start:gap_end-1, "hs"] = last_val
+                    df.loc[gap_start:gap_end-1, "status"] = "forward_fill"
                     report["gaps_forward_filled"] += 1
-                
                 else:
-                    df.loc[current_gap_start:gap_end-1, "hs_filled"] = -999.0
-                    df.loc[current_gap_start:gap_end-1, "status"] = "offline"
+                    df.loc[gap_start:gap_end-1, "hs"] = -999.0
+                    df.loc[gap_start:gap_end-1, "status"] = "offline"
                     report["gaps_offline"] += 1
             
-            current_gap_start = None
-            gap_hours = 0
-    
-    if current_gap_start is not None:
-        gap_end = len(df)
-        gap_duration_hours = gap_hours
+            else:
+                df.loc[gap_start:gap_end-1, "hs"] = -999.0
+                df.loc[gap_start:gap_end-1, "status"] = "offline"
+                report["gaps_offline"] += 1
         
-        if gap_duration_hours <= (FORWARD_FILL_GAP_DAYS * 24):
-            last_val = df.loc[current_gap_start - 1, "hs"]
-            df.loc[current_gap_start:gap_end-1, "hs_filled"] = last_val
-            df.loc[current_gap_start:gap_end-1, "status"] = "forward_fill"
-            report["gaps_forward_filled"] += 1
         else:
-            df.loc[current_gap_start:gap_end-1, "hs_filled"] = -999.0
-            df.loc[current_gap_start:gap_end-1, "status"] = "offline"
-            report["gaps_offline"] += 1
-    
-    df["hs"] = df["hs_filled"]
-    df = df.drop(columns=["hs_filled"])
+            i += 1
     
     return df
 
