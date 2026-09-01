@@ -65,11 +65,17 @@ if ! command -v $SNOWPACK_CMD &> /dev/null; then
     exit 1
 fi
 
+# SNOWPACK simulation parameters
+BEGIN_DATE="2026-09-01T00:00"
+# Use current time as end date (format: YYYY-MM-DDTHH:MM)
+END_DATE=$(date -u '+%Y-%m-%dT%H:%M')
+
 # Count INI files
 INI_FILES=$(find "$CONFIG_DIR" -name "*.ini" -type f | sort)
 INI_COUNT=$(echo "$INI_FILES" | wc -l)
 
 echo "Found $INI_COUNT INI configuration files in $CONFIG_DIR"
+echo "Simulation period: $BEGIN_DATE to $END_DATE"
 echo ""
 
 # Track results
@@ -86,9 +92,9 @@ for ini_file in $INI_FILES; do
     echo "[$TOTAL/$INI_COUNT] Running SNOWPACK for sensor $SENSOR_ID..."
     echo "  Config: $INI_NAME"
     
-    # Run snowpack from the base directory so relative paths work correctly
-    # Capture stderr for debugging
-    if $SNOWPACK_CMD "$ini_file" 2>&1 | tee "/tmp/snowpack_${SENSOR_ID}.log" > /dev/null; then
+    # Run snowpack with required command-line parameters
+    # The -c flag specifies the config file, -e specifies the end date
+    if $SNOWPACK_CMD -c "$ini_file" -e "$END_DATE" 2>&1 | tee "/tmp/snowpack_${SENSOR_ID}.log" > /dev/null; then
         SUCCESS=$((SUCCESS + 1))
         echo "  ✓ SUCCESS"
     else
