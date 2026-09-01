@@ -79,7 +79,7 @@ fi
 INI_FILES=$(find "$CONFIG_DIR" -name "*.ini" -type f | sort)
 INI_COUNT=$(echo "$INI_FILES" | wc -l)
 
-echo "Found $INI_COUNT INI configuration files"
+echo "Found $INI_COUNT INI configuration files in $CONFIG_DIR"
 echo ""
 
 # Track results
@@ -96,6 +96,7 @@ for ini_file in $INI_FILES; do
     echo "[$TOTAL/$INI_COUNT] Running SNOWPACK for sensor $SENSOR_ID..."
     echo "  Config: $INI_NAME"
     
+    # Run snowpack from the base directory so relative paths work correctly
     if $SNOWPACK_CMD "$ini_file" > /dev/null 2>&1; then
         SUCCESS=$((SUCCESS + 1))
         echo "  ✓ SUCCESS"
