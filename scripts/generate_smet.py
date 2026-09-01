@@ -10,7 +10,7 @@ import requests
 import pandas as pd
 import numpy as np
 import csv
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, List, Dict, Tuple
 from math import radians, sin, cos, sqrt, atan2
@@ -167,7 +167,7 @@ def fetch_auto_hour_data(station_id: int, day_from: datetime, day_to: datetime) 
     except Exception:
         return []
 
-def fetch_synop_chunked(station_id: int, day_from: datetime, day_to: datetime) -> List[Dict]:
+def fetch_precip_chunked(station_id: int, day_from: datetime, day_to: datetime) -> List[Dict]:
     """Fetch SYNOP precipitation data in chunks."""
     all_entries = []
     current = day_from
@@ -196,6 +196,62 @@ def fetch_synop_chunked(station_id: int, day_from: datetime, day_to: datetime) -
         current = chunk_end + timedelta(days=1)
     
     return all_entries
+
+def load_precip_data() -> pd.DataFrame:
+    """Load precipitation data from SYNOP endpoints."""
+    print("\nFetching precipitation data from SYNOP stations...")
+    precip_dfs = []
+    
+    for sid in PRECIP_STATIONS:
+        print("  Station %d..." % sid)
+        entries = fetch_precip_chunked(sid, START_DATE, END_DATE)
+        
+        if not entries:
+            print("    No data")
+            continue
+        
+        try:
+            df = pd.DataFrame(entries)
+            
+            # Look for precipitation column (might be 'r', 'R', or 'rr')
+            precip_col = None
+            for col in ['r', 'R', 'rr', 'RR']:
+                if col in df.columns:
+                    precip_col = col
+                    break
+            
+            if not precip_col:
+                print("    No precipitation column found. Available: %s" % str(list(df.columns)))
+                continue
+            
+            # Select needed columns
+            keep_cols = [c for c in ["station", "name", "time", precip_col] if c in df.columns]
+            df = df[keep_cols].copy()
+            
+            # Rename precipitation column to 'r' for consistency
+            if precip_col != 'r':
+                df = df.rename(columns={precip_col: 'r'})
+            
+            df["time"] = pd.to_datetime(df["time"])
+            df = df.dropna(subset=["r"])
+            
+            # Filter out negative or obviously bad values
+            df = df[df["r"] >= 0]
+            
+            precip_dfs.append(df)
+            print("    Loaded %d records" % len(df))
+        except Exception as e:
+            print("    Error processing: %s" % str(e))
+            continue
+    
+    if not precip_dfs:
+        print("  No precipitation data found")
+        return pd.DataFrame()
+    
+    merged = pd.concat(precip_dfs, ignore_index=True)
+    merged = merged.sort_values("time")
+    print("  Total precipitation records: %d" % len(merged))
+    return merged
 
 def build_hourly_series(entries: List[Dict], key: str) -> pd.Series:
     """Convert raw IMO entries to a pandas Series indexed by timestamp."""
@@ -231,36 +287,6 @@ def build_hourly_series(entries: List[Dict], key: str) -> pd.Series:
 
     series = pd.Series(values, index=pd.DatetimeIndex(times))
     return series.sort_index()
-
-def load_precip_data() -> pd.DataFrame:
-    """Load precipitation data from SYNOP endpoints."""
-    print("\nFetching precipitation data from SYNOP stations...")
-    precip_dfs = []
-    
-    for sid in PRECIP_STATIONS:
-        print("  Station %d..." % sid)
-        entries = fetch_synop_chunked(sid, START_DATE, END_DATE)
-        
-        if not entries:
-            print("    No data")
-            continue
-        
-        df = pd.DataFrame(entries)
-        if "r" in df.columns:
-            df = df[["station", "name", "time", "r"]].copy()
-            df["time"] = pd.to_datetime(df["time"])
-            df = df.dropna(subset=["r"])
-            precip_dfs.append(df)
-            print("    Loaded %d records" % len(df))
-    
-    if not precip_dfs:
-        print("  No precipitation data found")
-        return pd.DataFrame()
-    
-    merged = pd.concat(precip_dfs, ignore_index=True)
-    merged = merged.sort_values("time")
-    print("  Total precipitation records: %d" % len(merged))
-    return merged
 
 def expand_daily_to_hourly(daily_series: pd.Series, target_index: pd.DatetimeIndex) -> pd.Series:
     """Expand daily data to hourly by spreading evenly across 24 hours."""
