@@ -48,7 +48,7 @@ METEO = SMET
 METEOPATH = ./data/smet_files
 METEOFILE = {sensor_id}_smet_merged.txt
 SNOW = SMET
-SNOWPATH = ./data/snow_heights
+SNOWPATH = ./config
 SNOWFILE = {sensor_id}_{clean_sensor_name}_hs.sno
 STARTDATE = 2025-09-01T00:00
 ENDDATE = 2026-07-01T00:00
@@ -165,11 +165,9 @@ def main():
     
     sensors_file = os.path.join(base_dir, 'sensors_list.txt')
     config_dir = os.path.join(base_dir, 'config')
-    snow_heights_dir = os.path.join(base_dir, 'data', 'snow_heights')
     
     # Create directories if they don't exist
     os.makedirs(config_dir, exist_ok=True)
-    os.makedirs(snow_heights_dir, exist_ok=True)
     
     if not os.path.exists(sensors_file):
         print(f"Error: {sensors_file} not found!")
@@ -177,7 +175,6 @@ def main():
     
     print(f"Reading sensors from: {sensors_file}")
     print(f"Config output: {config_dir}")
-    print(f"SNO files output: {snow_heights_dir}")
     print()
     
     ini_count = 0
@@ -203,12 +200,12 @@ def main():
             ini_count += 1
             
             # Generate empty SNO file
-            generate_sno(sensor_id, name, latitude, longitude, altitude, snow_heights_dir)
+            generate_sno(sensor_id, name, latitude, longitude, altitude, config_dir)
             sno_count += 1
     
     print()
     print(f"Generated {ini_count} INI files in {config_dir}")
-    print(f"Generated {sno_count} SNO files in {snow_heights_dir}")
+    print(f"Generated {sno_count} SNO files in {config_dir}")
 
 if __name__ == "__main__":
     main()
