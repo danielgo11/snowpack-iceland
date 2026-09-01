@@ -1,5 +1,5 @@
 """
-Merge snow height data from *_hs.sno files into SMET files.
+Merge snow height data from *_hs.txt files into SMET files.
 Reads all sensor IDs from sensors_list.txt and dynamically matches
 HS files with SMET files. Inserts HS in correct position after PSUM.
 Converts HS from cm to m. Fills missing data (-999.000) by linear interpolation.
@@ -138,9 +138,9 @@ def read_sensor_temp_data(filepath: Path):
         if len(parts) >= 3:
             try:
                 timestamp = parts[1]
-                # For HS .sno files, typically only has: station_id, timestamp, HS
+                # For HS .txt files, typically only has: station_id, timestamp, HS
                 # But if extended with temp, it would be parts[3]
-                # We'll skip this for now as the .sno files only have HS
+                # We'll skip this for now as the .txt files only have HS
             except (ValueError, IndexError):
                 continue
 
@@ -246,7 +246,7 @@ def filter_unrealistic_hs(data_rows, new_fields, elevation, station_name):
 def merge_station(sensor_id: int, sensor_name: str, elevation: int) -> Path:
     """Merge HS data into SMET file, inserting in correct position."""
     smet_filepath = SMET_PATH / ("%d_smet_merged.txt" % sensor_id)
-    hs_filepath = SNOW_PATH / ("%d_hs.sno" % sensor_id)
+    hs_filepath = SNOW_PATH / ("%d_hs.txt" % sensor_id)
     output_file = OUTPUT_PATH / ("%d_smet_merged.txt" % sensor_id)
 
     print("\nProcessing sensor %d (%s, elev=%d m)..." % (sensor_id, sensor_name, elevation))
