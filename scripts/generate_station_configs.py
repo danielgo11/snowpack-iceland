@@ -49,7 +49,7 @@ METEOPATH = ./data/smet_files
 METEOFILE = {sensor_id}_smet_merged.txt
 SNOW = SMET
 SNOWPATH = ./config
-SNOWFILE = {sensor_id}_{clean_sensor_name}_hs.sno
+SNOWFILE = {sensor_id}.sno
 STARTDATE = 2025-09-01T00:00
 ENDDATE = 2026-07-01T00:00
 
@@ -117,8 +117,7 @@ ENABLE_RESAMPLING = TRUE
 def generate_sno(sensor_id, name, latitude, longitude, altitude, output_dir):
     """Generate an empty .sno file for a sensor."""
     
-    clean_sensor_name = clean_name(name)
-    sno_filename = f"{sensor_id}_{clean_sensor_name}_hs.sno"
+    sno_filename = f"{sensor_id}.sno"
     sno_path = os.path.join(output_dir, sno_filename)
     
     sno_content = f"""SMET 1.1 ASCII
