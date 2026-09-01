@@ -21,8 +21,8 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 
 SNOWSENSE_DATA_URL = "https://dev.snowsense.is/v1/sensors/{sensor_id}/data"
 
-START_DATE = datetime(2025, 9, 1, 0, 0, 0, tzinfo=timezone.utc)
-END_DATE = datetime(2026, 7, 1, 23, 59, 59, tzinfo=timezone.utc)
+START_DATE = datetime(2026, 9, 1, 0, 0, 0, tzinfo=timezone.utc)
+END_DATE = datetime(2027, 7, 1, 23, 59, 59, tzinfo=timezone.utc)
 
 MAX_HS_CM = 500
 MAX_POINTS_PER_FETCH = 5000
@@ -314,9 +314,9 @@ def fill_gaps(df: pd.DataFrame, report: Dict) -> pd.DataFrame:
 
 def write_smet_file(df: pd.DataFrame, sensor_id: int, sensor_name: str, 
                    sensor_lat: float, sensor_lon: float, sensor_elev: float):
-    """Write snow height data in SMET 1.1 ASCII format."""
+    """Write snow height data in SMET 1.1 ASCII format as .txt file."""
     
-    output_file = OUTPUT_DIR / ("%d_hs.sno" % sensor_id)
+    output_file = OUTPUT_DIR / ("%d_hs.txt" % sensor_id)
     
     with open(output_file, "w") as f:
         f.write("SMET 1.1 ASCII\n")
