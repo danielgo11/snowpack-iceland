@@ -81,14 +81,14 @@ def update_ini_end_dates():
             return False
     
     log(f"✓ Updated ENDDATE in {ini_count} INI files")
-    return True
+    return current_time
 
-def run_snowpack():
+def run_snowpack(end_time):
     """Run snowpack for all sensors."""
     base_dir = get_base_dir()
     config_dir = os.path.join(base_dir, "config")
     
-    cmd = f"cd {base_dir} && snowpack -c {config_dir}/*.ini -b 2025-09-01T00:00 2>&1"
+    cmd = f"cd {base_dir} && snowpack -c {config_dir}/*.ini -b 2025-09-01T00:00 -e {end_time} 2>&1"
     return run_command(cmd, "Snowpack simulation")
 
 def copy_output_to_archive():
@@ -96,6 +96,9 @@ def copy_output_to_archive():
     base_dir = get_base_dir()
     output_dir = os.path.join(base_dir, "output")
     archive_dir = os.path.join(os.path.dirname(base_dir), "vakt", "snowpack")
+    
+    # Create archive directory if it doesn't exist
+    os.makedirs(archive_dir, exist_ok=True)
     
     cmd = f"cp -r {output_dir}/* {archive_dir}/"
     return run_command(cmd, f"Copy output to {archive_dir}")
@@ -125,12 +128,13 @@ def main():
         sys.exit(1)
     
     # Step 2: Update INI end dates to current time
-    if not update_ini_end_dates():
+    end_time = update_ini_end_dates()
+    if not end_time:
         log("ERROR: INI update failed, aborting pipeline")
         sys.exit(1)
     
     # Step 3: Run snowpack
-    if not run_snowpack():
+    if not run_snowpack(end_time):
         log("WARNING: Snowpack run completed with errors")
         # Continue to archive step anyway
     
