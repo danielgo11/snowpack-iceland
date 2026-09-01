@@ -30,8 +30,8 @@ IMO_AUTO_HOUR_URL = "https://api.vedur.is/weather/observations/aws/hour"
 IMO_SYNOP_URL = "https://api.vedur.is/weather/observations/synop"
 
 PRECIP_STATIONS = [253, 408, 626]
-START_DATE = datetime(2025, 9, 1)
-END_DATE = datetime(2026, 7, 1)
+START_DATE = datetime(2026, 9, 1)
+END_DATE = datetime(2027, 7, 1)
 
 MAX_RADIUS_KM = 30.0
 MAX_STATIONS = 9
