@@ -389,7 +389,8 @@ def generate_smet_file(sensor_id: int, sensor_name: str, sensor_lat: float, sens
             print("  Failed to build data frame")
             return None
 
-        output_file = OUTPUT_DIR / ("%d_smet_merged.txt" % sensor_id)
+        # Create output filename with sensor name
+        output_file = OUTPUT_DIR / ("%d_%s_smet_merged.txt" % (sensor_id, sensor_name))
         _write_smet_file(output_file, sensor_id, sensor_name, sensor_lat, sensor_lon, sensor_elev,
                         chosen_station_tw, df)
 
