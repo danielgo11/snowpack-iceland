@@ -245,7 +245,7 @@ def filter_unrealistic_hs(data_rows, new_fields, elevation, station_name):
 
 def merge_station(sensor_id: int, sensor_name: str, elevation: int) -> Path:
     """Merge HS data into SMET file, inserting in correct position."""
-    smet_filepath = SMET_PATH / ("%d_smet_merged.txt" % sensor_id)
+    smet_filepath = SMET_PATH / ("%d_smet.txt" % sensor_id)
     hs_filepath = SNOW_PATH / ("%d_hs.txt" % sensor_id)
     output_file = OUTPUT_PATH / ("%d_smet_merged.txt" % sensor_id)
 
