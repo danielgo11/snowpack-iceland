@@ -76,6 +76,50 @@ def get_json(url: str, params: dict, timeout: int = 30):
         print("Error parsing JSON: %s" % str(e))
         return None
 
+def get_last_timestamp(sensor_id: int) -> Optional[datetime]:
+    """Get the last timestamp from existing HS file for a sensor."""
+    output_file = OUTPUT_DIR / ("%d_hs.txt" % sensor_id)
+    
+    if not output_file.exists():
+        return None
+    
+    try:
+        with open(output_file, 'r') as f:
+            lines = f.readlines()
+        
+        # Find [DATA] line
+        data_start = -1
+        for i, line in enumerate(lines):
+            if line.strip() == "[DATA]":
+                data_start = i + 1
+                break
+        
+        if data_start == -1 or data_start >= len(lines):
+            return None
+        
+        # Get last data line
+        last_line = None
+        for line in reversed(lines[data_start:]):
+            line = line.strip()
+            if line:
+                last_line = line
+                break
+        
+        if not last_line:
+            return None
+        
+        # Parse timestamp (column 1)
+        parts = last_line.split('\t')
+        if len(parts) >= 2:
+            timestamp_str = parts[1]
+            return pd.to_datetime(timestamp_str)
+    
+    except Exception as e:
+        print("    Error reading last timestamp: %s" % str(e))
+        return None
+    
+    return None
+
 def fetch_sensor_data(sensor_id: int, from_dt: datetime, to_dt: datetime) -> List[Dict]:
     """
     Fetch snow height data for a sensor between dates.
@@ -312,12 +356,62 @@ def fill_gaps(df: pd.DataFrame, report: Dict) -> pd.DataFrame:
     
     return df
 
-def write_smet_file(df: pd.DataFrame, sensor_id: int, sensor_name: str, 
-                   sensor_lat: float, sensor_lon: float, sensor_elev: float):
-    """Write snow height data in SMET 1.1 ASCII format as .txt file."""
+def append_smet_file(df: pd.DataFrame, sensor_id: int, sensor_name: str, 
+                    sensor_lat: float, sensor_lon: float, sensor_elev: float):
+    """Append new data to existing SMET file, or create if doesn't exist."""
     
     output_file = OUTPUT_DIR / ("%d_hs.txt" % sensor_id)
     
+    # Read existing file if it exists
+    existing_df = None
+    if output_file.exists():
+        try:
+            with open(output_file, 'r') as f:
+                lines = f.readlines()
+            
+            # Find [DATA] line
+            data_start = -1
+            for i, line in enumerate(lines):
+                if line.strip() == "[DATA]":
+                    data_start = i + 1
+                    break
+            
+            if data_start > 0:
+                # Parse existing data
+                existing_times = []
+                existing_values = []
+                for line in lines[data_start:]:
+                    line = line.strip()
+                    if line:
+                        parts = line.split('\t')
+                        if len(parts) >= 3:
+                            try:
+                                ts = pd.to_datetime(parts[1])
+                                hs_val = float(parts[2])
+                                existing_times.append(ts)
+                                existing_values.append(hs_val)
+                            except (ValueError, IndexError):
+                                continue
+                
+                if existing_times:
+                    existing_df = pd.DataFrame({
+                        "time": existing_times,
+                        "hs": existing_values,
+                    })
+                    print("  Loaded %d existing records" % len(existing_df))
+        
+        except Exception as e:
+            print("  Error reading existing file: %s" % str(e))
+    
+    # Merge new data with existing
+    if existing_df is not None:
+        df_combined = pd.concat([existing_df, df[["time", "hs"]]], ignore_index=True)
+        df_combined = df_combined.drop_duplicates(subset=["time"], keep="last")
+        df_combined = df_combined.sort_values("time").reset_index(drop=True)
+        print("  Combined: %d existing + new records = %d total unique" % (len(existing_df), len(df_combined)))
+        df = df_combined
+    
+    # Write complete file
     with open(output_file, "w") as f:
         f.write("SMET 1.1 ASCII\n")
         f.write("[HEADER]\n")
@@ -387,10 +481,24 @@ def main():
     for sensor_id, sensor_name, sensor_lat, sensor_lon, sensor_elev in sensors:
         print("\nProcessing sensor %d (%s)..." % (sensor_id, sensor_name))
         
-        raw_data = fetch_sensor_data(sensor_id, START_DATE, END_DATE)
+        # Determine fetch range: from last timestamp to END_DATE
+        last_ts = get_last_timestamp(sensor_id)
+        if last_ts:
+            fetch_from = last_ts + timedelta(hours=1)
+            print("  Last existing timestamp: %s" % last_ts)
+            print("  Fetching new data from: %s" % fetch_from)
+        else:
+            fetch_from = START_DATE
+            print("  No existing data, fetching from start: %s" % fetch_from)
+        
+        if fetch_from >= END_DATE:
+            print("  Already up to date")
+            continue
+        
+        raw_data = fetch_sensor_data(sensor_id, fetch_from, END_DATE)
         
         if not raw_data:
-            print("  Skipping sensor - no data")
+            print("  No new data to process")
             continue
         
         df, report = process_sensor_data(sensor_id, sensor_name, sensor_lat, sensor_lon, sensor_elev, raw_data)
@@ -399,7 +507,7 @@ def main():
             print("  Skipping sensor - processing failed")
             continue
         
-        output_file = write_smet_file(df, sensor_id, sensor_name, sensor_lat, sensor_lon, sensor_elev)
+        output_file = append_smet_file(df, sensor_id, sensor_name, sensor_lat, sensor_lon, sensor_elev)
         write_report(sensor_id, sensor_name, report, str(output_file))
         
         results.append((sensor_id, sensor_name, output_file))
@@ -413,7 +521,7 @@ def main():
         for sid, sname, sfile in results:
             print("  - %d (%s): %s" % (sid, sname, sfile))
     else:
-        print("No sensors successfully processed")
+        print("No new data processed")
     
     print("\nOutput directory: %s" % OUTPUT_DIR.resolve())
 
