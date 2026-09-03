@@ -22,7 +22,6 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 SNOWSENSE_DATA_URL = "https://dev.snowsense.is/v1/sensors/{sensor_id}/data"
 
 START_DATE = datetime(2026, 9, 1, 0, 0, 0, tzinfo=timezone.utc)
-END_DATE = datetime(2027, 7, 1, 23, 59, 59, tzinfo=timezone.utc)
 
 MAX_HS_CM = 500
 MAX_POINTS_PER_FETCH = 5000
@@ -112,7 +111,11 @@ def get_last_timestamp(sensor_id: int) -> Optional[datetime]:
         parts = last_line.split('\t')
         if len(parts) >= 2:
             timestamp_str = parts[1]
-            return pd.to_datetime(timestamp_str)
+            ts = pd.to_datetime(timestamp_str)
+            # Make timezone-aware to UTC if naive
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            return ts
     
     except Exception as e:
         print("    Error reading last timestamp: %s" % str(e))
@@ -170,7 +173,8 @@ def fetch_sensor_data(sensor_id: int, from_dt: datetime, to_dt: datetime) -> Lis
     return all_data
 
 def process_sensor_data(sensor_id: int, sensor_name: str, sensor_lat: float, 
-                       sensor_lon: float, sensor_elev: float, raw_data: List[Dict]) -> Tuple[Optional[pd.DataFrame], Dict]:
+                       sensor_lon: float, sensor_elev: float, raw_data: List[Dict],
+                       start_date: datetime, end_date: datetime) -> Tuple[Optional[pd.DataFrame], Dict]:
     """
     Process raw sensor data:
     - Extract HS values (laserSnowdepthCm)
@@ -260,7 +264,7 @@ def process_sensor_data(sensor_id: int, sensor_name: str, sensor_lat: float,
     
     print("  Data range: %s to %s" % (report["start_date"], report["end_date"]))
     
-    hourly_index = pd.date_range(start=START_DATE, end=END_DATE, freq="1h", tz=timezone.utc)
+    hourly_index = pd.date_range(start=start_date, end=end_date, freq="1h", tz=timezone.utc)
     
     df_hourly = df_raw.set_index("time").reindex(hourly_index, method="nearest", tolerance=pd.Timedelta("5min"))
     df_hourly = df_hourly.reset_index()
@@ -464,7 +468,10 @@ def main():
     print("=" * 70)
     print("Fetch and Process Snow Heights from Snowsense SM4 Sensors")
     print("=" * 70)
-    print("Date range: %s to %s" % (START_DATE, END_DATE))
+    
+    # Use current time as end date
+    now = datetime.now(timezone.utc)
+    print("Date range: %s to %s" % (START_DATE, now))
     print("Output directory: %s" % OUTPUT_DIR.resolve())
     print("")
     
@@ -481,7 +488,7 @@ def main():
     for sensor_id, sensor_name, sensor_lat, sensor_lon, sensor_elev in sensors:
         print("\nProcessing sensor %d (%s)..." % (sensor_id, sensor_name))
         
-        # Determine fetch range: from last timestamp to END_DATE
+        # Determine fetch range: from last timestamp to now
         last_ts = get_last_timestamp(sensor_id)
         if last_ts:
             fetch_from = last_ts + timedelta(hours=1)
@@ -491,17 +498,14 @@ def main():
             fetch_from = START_DATE
             print("  No existing data, fetching from start: %s" % fetch_from)
         
-        if fetch_from >= END_DATE:
-            print("  Already up to date")
-            continue
-        
-        raw_data = fetch_sensor_data(sensor_id, fetch_from, END_DATE)
+        # Always fetch to current time
+        raw_data = fetch_sensor_data(sensor_id, fetch_from, now)
         
         if not raw_data:
             print("  No new data to process")
             continue
         
-        df, report = process_sensor_data(sensor_id, sensor_name, sensor_lat, sensor_lon, sensor_elev, raw_data)
+        df, report = process_sensor_data(sensor_id, sensor_name, sensor_lat, sensor_lon, sensor_elev, raw_data, START_DATE, now)
         
         if df is None:
             print("  Skipping sensor - processing failed")
