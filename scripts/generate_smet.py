@@ -30,8 +30,7 @@ IMO_AUTO_HOUR_URL = "https://api.vedur.is/weather/observations/aws/hour"
 IMO_SYNOP_URL = "https://api.vedur.is/weather/observations/synop"
 
 PRECIP_STATIONS = [253, 408, 626]
-START_DATE = datetime(2026, 9, 1)
-END_DATE = datetime(2027, 7, 1)
+START_DATE = datetime(2026, 9, 1, tzinfo=timezone.utc)
 
 MAX_RADIUS_KM = 30.0
 MAX_STATIONS = 9
@@ -197,14 +196,14 @@ def fetch_precip_chunked(station_id: int, day_from: datetime, day_to: datetime) 
     
     return all_entries
 
-def load_precip_data() -> pd.DataFrame:
+def load_precip_data(day_from: datetime, day_to: datetime) -> pd.DataFrame:
     """Load precipitation data from SYNOP endpoints."""
     print("\nFetching precipitation data from SYNOP stations...")
     precip_dfs = []
     
     for sid in PRECIP_STATIONS:
         print("  Station %d..." % sid)
-        entries = fetch_precip_chunked(sid, START_DATE, END_DATE)
+        entries = fetch_precip_chunked(sid, day_from, day_to)
         
         if not entries:
             print("    No data")
@@ -328,7 +327,7 @@ def check_data_quality(t_series: pd.Series, f_series: pd.Series, min_coverage: f
 
 def get_last_timestamp(sensor_id: int) -> Optional[datetime]:
     """Get the last timestamp from existing SMET file for a sensor."""
-    output_file = OUTPUT_DIR / ("%d_smet_merged.txt" % sensor_id)
+    output_file = OUTPUT_DIR / ("%d_smet.txt" % sensor_id)
     
     if not output_file.exists():
         return None
@@ -362,7 +361,11 @@ def get_last_timestamp(sensor_id: int) -> Optional[datetime]:
         parts = last_line.split('\t')
         if len(parts) >= 2:
             timestamp_str = parts[1]
-            return pd.to_datetime(timestamp_str)
+            ts = pd.to_datetime(timestamp_str)
+            # Make timezone-aware to UTC if naive
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            return ts
     
     except Exception as e:
         print("    Error reading last timestamp: %s" % str(e))
@@ -372,7 +375,8 @@ def get_last_timestamp(sensor_id: int) -> Optional[datetime]:
 
 def generate_smet_file(sensor_id: int, sensor_name: str, sensor_lat: float, sensor_lon: float,
                       sensor_elev: float, nearest_stations: pd.DataFrame,
-                      all_stations: pd.DataFrame, precip_data: pd.DataFrame) -> Optional[str]:
+                      all_stations: pd.DataFrame, precip_data: pd.DataFrame,
+                      start_date: datetime, end_date: datetime) -> Optional[str]:
     """Generate a complete SMET file for one sensor location."""
     print("\nProcessing sensor %d (%s)..." % (sensor_id, sensor_name))
 
@@ -391,7 +395,7 @@ def generate_smet_file(sensor_id: int, sensor_name: str, sensor_lat: float, sens
 
         print("    Trying station %d (%s, %.1f km away)..." % (sid, station_name, dist_km))
 
-        entries = fetch_auto_hour_data(sid, START_DATE, END_DATE)
+        entries = fetch_auto_hour_data(sid, start_date, end_date)
 
         if not entries:
             print("      No data returned")
@@ -428,12 +432,12 @@ def generate_smet_file(sensor_id: int, sensor_name: str, sensor_lat: float, sens
         return None
 
     try:
-        df = _build_smet_dataframe(sensor_id, hourly_data_tw, chosen_station_tw, precip_data)
+        df = _build_smet_dataframe(sensor_id, hourly_data_tw, chosen_station_tw, precip_data, start_date, end_date)
         if df is None or df.empty:
             print("  Failed to build data frame")
             return None
 
-        output_file = OUTPUT_DIR / ("%d_smet_merged.txt" % sensor_id)
+        output_file = OUTPUT_DIR / ("%d_smet.txt" % sensor_id)
         _append_smet_file(output_file, sensor_id, sensor_name, sensor_lat, sensor_lon, sensor_elev,
                         chosen_station_tw, df)
 
@@ -447,7 +451,7 @@ def generate_smet_file(sensor_id: int, sensor_name: str, sensor_lat: float, sens
         return None
 
 def _build_smet_dataframe(sensor_id: int, entries_tw: List[Dict], station_tw: pd.Series, 
-                         precip_data: pd.DataFrame) -> Optional[pd.DataFrame]:
+                         precip_data: pd.DataFrame, start_date: datetime, end_date: datetime) -> Optional[pd.DataFrame]:
     """Build a DataFrame with SMET variables from IMO hourly data."""
 
     t_series = build_hourly_series(entries_tw, "t")
@@ -468,7 +472,15 @@ def _build_smet_dataframe(sensor_id: int, entries_tw: List[Dict], station_tw: pd
     # Validate temperature ranges
     t_series = t_series[(t_series >= -60) & (t_series <= 50)]
 
-    ts_index = pd.date_range(start=START_DATE, end=END_DATE, freq="1h")
+    ts_index = pd.date_range(start=start_date, end=end_date, freq="1h", tz="UTC")
+
+    # Ensure t_series, f_series, and d_series have matching timezone (UTC-aware)
+    if t_series.index.tz is None:
+        t_series.index = t_series.index.tz_localize("UTC")
+    if f_series.index.tz is None:
+        f_series.index = f_series.index.tz_localize("UTC")
+    if d_series.index.tz is None:
+        d_series.index = d_series.index.tz_localize("UTC")
 
     t = t_series.reindex(ts_index, method="nearest", tolerance=pd.Timedelta("30min"))
     f = f_series.reindex(ts_index, method="nearest", tolerance=pd.Timedelta("30min"))
@@ -479,6 +491,8 @@ def _build_smet_dataframe(sensor_id: int, entries_tw: List[Dict], station_tw: pd
     if not precip_data.empty:
         r_series = build_hourly_series(precip_data.to_dict('records'), "r")
         if not r_series.empty:
+            if r_series.index.tz is None:
+                r_series.index = r_series.index.tz_localize("UTC")
             r = expand_daily_to_hourly(r_series, ts_index)
             precip_coverage = pd.notna(r).sum() / len(r) * 100
             print("    Precipitation: %.1f%% coverage" % precip_coverage)
@@ -529,6 +543,9 @@ def _append_smet_file(output_path: Path, sensor_id: int, sensor_name: str, senso
 
     easting, northing = latlon_to_utm27(sensor_lat, sensor_lon)
     
+    # Ensure all new timestamps are timezone-aware UTC
+    df["timestamp"] = df["timestamp"].dt.tz_localize('UTC', ambiguous='NaT', nonexistent='NaT') if df["timestamp"].dt.tz is None else df["timestamp"]
+    
     # Read existing file if it exists
     existing_df = None
     if output_path.exists():
@@ -546,7 +563,6 @@ def _append_smet_file(output_path: Path, sensor_id: int, sensor_name: str, senso
             if data_start > 0:
                 # Parse existing data
                 existing_times = []
-                existing_rows = []
                 for line in lines[data_start:]:
                     line = line.strip()
                     if line:
@@ -554,8 +570,10 @@ def _append_smet_file(output_path: Path, sensor_id: int, sensor_name: str, senso
                         if len(parts) >= 2:
                             try:
                                 ts = pd.to_datetime(parts[1])
+                                # Make timezone-aware UTC
+                                if ts.tzinfo is None:
+                                    ts = ts.replace(tzinfo=timezone.utc)
                                 existing_times.append(ts)
-                                existing_rows.append(parts)
                             except (ValueError, IndexError):
                                 continue
                 
@@ -576,9 +594,13 @@ def _append_smet_file(output_path: Path, sensor_id: int, sensor_name: str, senso
         
         # Keep only new rows not in existing
         df_new = df[~df["timestamp"].isin(existing_df["timestamp"])]
-        df = pd.concat([existing_df.merge(df, on="timestamp", how="left"), df_new], ignore_index=True)
-        df = df.sort_values("timestamp").reset_index(drop=True)
-        print("  Combined: %d existing + %d new records = %d total unique" % (len(existing_df), len(df_new), len(df)))
+        if len(df_new) > 0:
+            df = pd.concat([df[df["timestamp"].isin(existing_df["timestamp"])], df_new], ignore_index=True)
+            df = df.sort_values("timestamp").reset_index(drop=True)
+            print("  Combined: %d existing + %d new records = %d total unique" % (len(existing_df), len(df_new), len(df)))
+        else:
+            df = df[df["timestamp"].isin(existing_df["timestamp"])]
+            print("  All data already exists, no new records")
     
     # Write complete file
     with open(output_path, "w") as f:
@@ -621,6 +643,12 @@ def main():
     print("SMET Generator for SNOWPACK - Iceland Avalanche Sites")
     print("=" * 70)
 
+    # Use current time as end date
+    now = datetime.now(timezone.utc)
+    print("Date range: %s to %s" % (START_DATE, now))
+    print("Output directory: %s" % OUTPUT_DIR.resolve())
+    print("")
+
     # Load sensors from CSV
     sensors = load_sensors_from_csv("sensors_list.txt")
     if not sensors:
@@ -634,7 +662,7 @@ def main():
         print("Failed to load stations. Exiting.")
         return
 
-    precip_data = load_precip_data()
+    precip_data = load_precip_data(START_DATE, now)
 
     results = []
     for sensor_id, sensor_name, sensor_lat, sensor_lon, sensor_elev in sensors:
@@ -649,7 +677,7 @@ def main():
             print("  - %s (ID %d, %.1f km)" % (s['name'], int(s['id']), s['dist_km']))
 
         output_file = generate_smet_file(sensor_id, sensor_name, sensor_lat, sensor_lon,
-                                        sensor_elev, nearest, all_stations, precip_data)
+                                        sensor_elev, nearest, all_stations, precip_data, START_DATE, now)
 
         if output_file:
             results.append((sensor_id, sensor_name, output_file))
