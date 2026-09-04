@@ -240,6 +240,10 @@ if [[ "$resolved_output" == "$resolved_copy" ]]; then
 fi
 
 mkdir -p "$COPY_DIR"
+if ! find "$OUTPUT_DIR" -mindepth 1 -type f -print -quit | grep -q .; then
+  echo "No output files found in $OUTPUT_DIR; refusing to publish empty results." >&2
+  exit 1
+fi
 find "$COPY_DIR" -mindepth 1 -delete
 cp -a "$OUTPUT_DIR"/. "$COPY_DIR"/
 echo "Copied outputs to $COPY_DIR"

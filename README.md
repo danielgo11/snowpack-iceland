@@ -3,6 +3,10 @@ SNOWPACK avalanche modeling for Iceland with IMO station data and snowpack forci
 
 ## HARMONIE daily forecast run
 
+Requirements:
+- `snowpack` available on `PATH`
+- Python with `pygrib` and `astral` installed
+
 Use:
 
 ```bash
