@@ -239,11 +239,23 @@ if [[ "$resolved_output" == "$resolved_copy" ]]; then
   exit 1
 fi
 
-mkdir -p "$COPY_DIR"
 if ! find "$OUTPUT_DIR" -mindepth 1 -type f -print -quit | grep -q .; then
   echo "No output files found in $OUTPUT_DIR; refusing to publish empty results." >&2
   exit 1
 fi
-find "$COPY_DIR" -mindepth 1 -delete
-cp -a "$OUTPUT_DIR"/. "$COPY_DIR"/
+publish_parent=$(dirname "$COPY_DIR")
+mkdir -p "$publish_parent"
+tmp_publish_dir=$(mktemp -d "$publish_parent/.snowpack_publish.XXXXXX")
+cp -a "$OUTPUT_DIR"/. "$tmp_publish_dir"/
+
+backup_dir=""
+if [[ -e "$COPY_DIR" ]]; then
+  backup_dir="${COPY_DIR}.bak.$$"
+  rm -rf "$backup_dir"
+  mv "$COPY_DIR" "$backup_dir"
+fi
+mv "$tmp_publish_dir" "$COPY_DIR"
+if [[ -n "$backup_dir" ]]; then
+  rm -rf "$backup_dir"
+fi
 echo "Copied outputs to $COPY_DIR"
