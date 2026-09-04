@@ -8,7 +8,7 @@ import math
 import time
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -152,19 +152,6 @@ def extract_rows_from_file(filepath: Path) -> Dict[str, Dict[datetime, Dict[str,
             if valid_date is None:
                 continue
             timestamp = _to_timestamp(valid_date)
-            if short_name == "grad":
-                step_range = str(getattr(grb, "stepRange", "")).strip()
-                try:
-                    if "-" in step_range:
-                        step_hours = int(step_range.split("-")[-1])
-                    elif step_range:
-                        step_hours = int(step_range)
-                    else:
-                        step_hours = 0
-                except ValueError:
-                    step_hours = 0
-                timestamp = timestamp + timedelta(hours=step_hours)
-
             values = grb.values
             for site in SITES.values():
                 site_rows = per_file_rows[site.name]

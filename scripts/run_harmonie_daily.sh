@@ -190,24 +190,23 @@ hours = int(sys.argv[2])
 print((start + timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M"))
 PY
 )
-snow_begin="${SEASON_START}T00:00"
 
 failed=0
 for station in vestfj nord austfj oddskard; do
   ini="$CONFIG_DIR/${station}.ini"
   if [[ -f "$ini" ]]; then
     echo "Running $station"
-    if ! snowpack -c "$ini" -b "$snow_begin" -e "$run_end"; then
+    if ! snowpack -c "$ini" -b "$run_start" -e "$run_end"; then
       echo "SNOWPACK failed for $station" >&2
       failed=1
     fi
   fi
 done
 
-mkdir -p "$COPY_DIR"
-cp -a "$OUTPUT_DIR"/. "$COPY_DIR"/
-echo "Copied outputs to $COPY_DIR"
-
 if [[ "$failed" -ne 0 ]]; then
   exit 1
 fi
+
+mkdir -p "$COPY_DIR"
+cp -a "$OUTPUT_DIR"/. "$COPY_DIR"/
+echo "Copied outputs to $COPY_DIR"
