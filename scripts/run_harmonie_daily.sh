@@ -210,6 +210,13 @@ if [[ "$failed" -ne 0 ]]; then
   exit 1
 fi
 
+resolved_output=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$OUTPUT_DIR")
+resolved_copy=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$COPY_DIR")
+if [[ "$resolved_output" == "$resolved_copy" ]]; then
+  echo "Refusing to copy: output and destination paths are the same ($resolved_output)" >&2
+  exit 1
+fi
+
 mkdir -p "$COPY_DIR"
 find "$COPY_DIR" -mindepth 1 -delete
 cp -a "$OUTPUT_DIR"/. "$COPY_DIR"/
