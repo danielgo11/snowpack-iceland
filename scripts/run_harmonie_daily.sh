@@ -112,6 +112,7 @@ echo "[2/6] Full rebuild: clearing staged GRIB + SMET"
 mkdir -p "$STAGED_GRIB_DIR" "$SMET_DIR" "$OUTPUT_DIR"
 find "$STAGED_GRIB_DIR" -maxdepth 1 -type f -name '*.grib2' -delete
 find "$SMET_DIR" -maxdepth 1 -type f -name '*.smet' -delete
+find "$OUTPUT_DIR" -maxdepth 1 -type f -delete
 
 echo "[3/6] Staging GRIB files"
 copied=0
@@ -192,7 +193,9 @@ PY
 )
 
 failed=0
-for station in vestfj nord austfj oddskard; do
+for smet_file in "$SMET_DIR"/*.smet; do
+  [[ -e "$smet_file" ]] || continue
+  station=$(basename "$smet_file" .smet)
   ini="$CONFIG_DIR/${station}.ini"
   if [[ -f "$ini" ]]; then
     echo "Running $station"

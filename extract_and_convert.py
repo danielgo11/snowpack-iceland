@@ -16,6 +16,8 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 MISSING_VALUE = -999.0
 RETRY_ATTEMPTS = 5
 RETRY_SLEEP_SECONDS = 10
+# Daylight forcing follows the operational rule: disable night ISWR forcing before May 9.
+DAYLIGHT_FORCE_CUTOFF = (5, 9)
 pygrib = None
 Observer = None
 sun = None
@@ -211,7 +213,7 @@ def daylight_forced_iswr(site: Site, timestamp: datetime, iswr: Optional[float],
     if iswr is None:
         return None
 
-    if (timestamp.month, timestamp.day) >= (5, 9):
+    if (timestamp.month, timestamp.day) >= DAYLIGHT_FORCE_CUTOFF:
         return iswr
 
     cache_key = (site.name, timestamp.date())
