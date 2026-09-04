@@ -215,7 +215,8 @@ def daylight_forced_iswr(site: Site, timestamp: datetime, iswr: Optional[float],
     if iswr is None:
         return None
 
-    if (timestamp.month, timestamp.day) >= DAYLIGHT_FORCE_CUTOFF:
+    cutoff_dt = datetime(timestamp.year, DAYLIGHT_FORCE_CUTOFF[0], DAYLIGHT_FORCE_CUTOFF[1], tzinfo=timezone.utc)
+    if timestamp >= cutoff_dt:
         return iswr
 
     cache_key = (site.name, timestamp.date())

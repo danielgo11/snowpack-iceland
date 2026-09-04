@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="/imo/vinnugogn/ofanflod/verk/hmat/snowpack/harmonie"
+LOCK_FILE="/tmp/run_harmonie_daily.lock"
 SOURCE_GRIB_DIR=""
 STAGED_GRIB_DIR=""
 SMET_DIR=""
@@ -53,6 +54,12 @@ STAGED_GRIB_DIR="${STAGED_GRIB_DIR:-$ROOT_DIR/data/grib}"
 SMET_DIR="${SMET_DIR:-$ROOT_DIR/data/smet}"
 CONFIG_DIR="${CONFIG_DIR:-$ROOT_DIR/config}"
 OUTPUT_DIR="${OUTPUT_DIR:-$ROOT_DIR/output}"
+
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+  echo "Another run_harmonie_daily.sh process is already running." >&2
+  exit 1
+fi
 
 if [[ -z "$SEASON_START" ]]; then
   year_now=$(date -u +%Y)
