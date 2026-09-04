@@ -211,5 +211,6 @@ if [[ "$failed" -ne 0 ]]; then
 fi
 
 mkdir -p "$COPY_DIR"
+find "$COPY_DIR" -mindepth 1 -delete
 cp -a "$OUTPUT_DIR"/. "$COPY_DIR"/
 echo "Copied outputs to $COPY_DIR"

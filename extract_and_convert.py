@@ -16,7 +16,8 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 MISSING_VALUE = -999.0
 RETRY_ATTEMPTS = 5
 RETRY_SLEEP_SECONDS = 10
-# Daylight forcing follows the operational rule: disable night ISWR forcing before May 9.
+# Operational requirement: before May 9 each year, force ISWR to zero outside daylight hours.
+# From May 9 onward, use model ISWR values as-is.
 DAYLIGHT_FORCE_CUTOFF = (5, 9)
 pygrib = None
 Observer = None
