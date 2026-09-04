@@ -223,8 +223,12 @@ def daylight_forced_iswr(site: Site, timestamp: datetime, iswr: Optional[float],
         try:
             sun_times = sun(observer, date=timestamp.date(), tzinfo=timezone.utc)
         except Exception:  # noqa: BLE001
-            return iswr
-        daylight_cache[cache_key] = (sun_times["sunrise"], sun_times["sunset"])
+            return 0.0
+        sunrise = sun_times.get("sunrise") or sun_times.get("dawn")
+        sunset = sun_times.get("sunset") or sun_times.get("dusk")
+        if sunrise is None or sunset is None:
+            return 0.0
+        daylight_cache[cache_key] = (sunrise, sunset)
 
     sunrise, sunset = daylight_cache[cache_key]
     if timestamp < sunrise or timestamp > sunset:

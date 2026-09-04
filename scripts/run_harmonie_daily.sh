@@ -254,8 +254,16 @@ if [[ -e "$COPY_DIR" ]]; then
   rm -rf "$backup_dir"
   mv "$COPY_DIR" "$backup_dir"
 fi
-mv "$tmp_publish_dir" "$COPY_DIR"
-if [[ -n "$backup_dir" ]]; then
-  rm -rf "$backup_dir"
+if mv "$tmp_publish_dir" "$COPY_DIR"; then
+  if [[ -n "$backup_dir" ]]; then
+    rm -rf "$backup_dir"
+  fi
+else
+  rm -rf "$tmp_publish_dir"
+  if [[ -n "$backup_dir" && -e "$backup_dir" ]]; then
+    mv "$backup_dir" "$COPY_DIR"
+  fi
+  echo "Failed to publish new output set to $COPY_DIR" >&2
+  exit 1
 fi
 echo "Copied outputs to $COPY_DIR"
