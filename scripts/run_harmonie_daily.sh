@@ -112,7 +112,7 @@ echo "[2/6] Full rebuild: clearing staged GRIB + SMET"
 mkdir -p "$STAGED_GRIB_DIR" "$SMET_DIR" "$OUTPUT_DIR"
 find "$STAGED_GRIB_DIR" -maxdepth 1 -type f -name '*.grib2' -delete
 find "$SMET_DIR" -maxdepth 1 -type f -name '*.smet' -delete
-find "$OUTPUT_DIR" -maxdepth 1 -type f -delete
+find "$OUTPUT_DIR" -mindepth 1 -delete
 
 echo "[3/6] Staging GRIB files"
 copied=0
