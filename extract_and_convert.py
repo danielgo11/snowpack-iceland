@@ -8,7 +8,7 @@ import math
 import time
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -27,10 +27,12 @@ TARGET_VARIABLES = {
     "10u": "10u",
     "10v": "10v",
     "i10fg": "i10fg",
+    "max_i10fg": "i10fg",
     "rprate": "rprate",
     "tsrwe": "tsrwe",
     "pres": "pres",
     "dswrf": "dswrf",
+    "grad": "dswrf",
     "ulwrf": "ulwrf",
     "nlwrf": "nlwrf",
     "z": "z",
@@ -150,6 +152,18 @@ def extract_rows_from_file(filepath: Path) -> Dict[str, Dict[datetime, Dict[str,
             if valid_date is None:
                 continue
             timestamp = _to_timestamp(valid_date)
+            if short_name == "grad":
+                step_range = str(getattr(grb, "stepRange", "")).strip()
+                try:
+                    if "-" in step_range:
+                        step_hours = int(step_range.split("-")[-1])
+                    elif step_range:
+                        step_hours = int(step_range)
+                    else:
+                        step_hours = 0
+                except ValueError:
+                    step_hours = 0
+                timestamp = timestamp + timedelta(hours=step_hours)
 
             values = grb.values
             for site in SITES.values():
@@ -239,6 +253,8 @@ def derive_output_fields(site: Site, timestamp: datetime, row: Dict[str, float],
     psum = None
     if row.get("tsrwe") is not None and row.get("rprate") is not None:
         psum = row["tsrwe"] + row["rprate"]
+    elif row.get("rprate") is not None:
+        psum = row["rprate"]
 
     iswr = daylight_forced_iswr(site, timestamp, row.get("dswrf"), daylight_cache)
     ilwr = None
