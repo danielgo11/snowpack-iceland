@@ -85,28 +85,46 @@ else
 fi
 
 echo "[1/6] Selecting latest ${RUN_HOUR}Z run (<= ${HORIZON_HOURS}h) from $SOURCE_GRIB_DIR"
-selected_cycle=""
-for f in "$SOURCE_GRIB_DIR"/ig-is_*; do
-  base=$(basename "$f")
-  if [[ "$base" =~ ^ig-is_([0-9]{10})\.([0-9]{2})(\.grib2)?$ ]]; then
-    ymdh="${BASH_REMATCH[1]}"
-    ff="${BASH_REMATCH[2]}"
-    hour="${ymdh:8:2}"
-    ymd="${ymdh:0:8}"
-    ff_num=$((10#$ff))
-    if [[ "$hour" == "$RUN_HOUR" && "$ymd" -ge "$SEASON_START_COMPACT" && "$ff_num" -le "$HORIZON_HOURS" ]]; then
-      if [[ -z "$selected_cycle" || "$ymdh" > "$selected_cycle" ]]; then
-        selected_cycle="$ymdh"
-      fi
-    fi
-  fi
-done
+selection=$(python3 - "$SOURCE_GRIB_DIR" "$RUN_HOUR" "$HORIZON_HOURS" "$SEASON_START_COMPACT" <<'PY'
+import re
+import sys
+from collections import defaultdict
+from pathlib import Path
 
-if [[ -z "$selected_cycle" ]]; then
-  echo "No eligible cycle found for ${RUN_HOUR}Z from $SEASON_START onward." >&2
+source_dir = Path(sys.argv[1])
+run_hour = sys.argv[2]
+horizon = int(sys.argv[3])
+season_start = sys.argv[4]
+pattern = re.compile(r"^ig-is_(\d{10})\.(\d{2})(?:\.grib2)?$")
+required = set(range(horizon + 1))
+leads_by_cycle = defaultdict(set)
+
+for p in source_dir.glob("ig-is_*"):
+    m = pattern.match(p.name)
+    if not m:
+        continue
+    ymdh, ff_text = m.groups()
+    ymd, hour = ymdh[:8], ymdh[8:10]
+    if hour != run_hour or ymd < season_start:
+        continue
+    ff = int(ff_text)
+    if ff <= horizon:
+        leads_by_cycle[ymdh].add(ff)
+
+complete = sorted(ymdh for ymdh, leads in leads_by_cycle.items() if required.issubset(leads))
+if not complete:
+    sys.exit(1)
+selected = complete[-1]
+for ff in sorted(required):
+    print(f"{selected}.{ff:02d}")
+PY
+) || {
+  echo "No complete eligible cycle found for ${RUN_HOUR}Z from $SEASON_START onward." >&2
   exit 1
-fi
-echo "Selected cycle: $selected_cycle"
+}
+readarray -t selected_members <<<"$selection"
+selected_cycle="${selected_members[0]%%.*}"
+echo "Selected complete cycle: $selected_cycle"
 
 echo "[2/6] Full rebuild: clearing staged GRIB + SMET"
 mkdir -p "$STAGED_GRIB_DIR" "$SMET_DIR" "$OUTPUT_DIR"
@@ -116,19 +134,23 @@ find "$OUTPUT_DIR" -mindepth 1 -delete
 
 echo "[3/6] Staging GRIB files"
 copied=0
-for f in "$SOURCE_GRIB_DIR"/ig-is_"$selected_cycle".*; do
-  base=$(basename "$f")
-  if [[ "$base" =~ ^ig-is_([0-9]{10})\.([0-9]{2})(\.grib2)?$ ]]; then
-    ff="${BASH_REMATCH[2]}"
-    ff_num=$((10#$ff))
-    if [[ "$ff_num" -le "$HORIZON_HOURS" ]]; then
-      cp -f "$f" "$STAGED_GRIB_DIR/${selected_cycle}.${ff}.grib2"
-      copied=$((copied + 1))
-    fi
+for member in "${selected_members[@]}"; do
+  src_plain="$SOURCE_GRIB_DIR/ig-is_${member}"
+  src_grib2="${src_plain}.grib2"
+  ff="${member##*.}"
+  if [[ -f "$src_plain" ]]; then
+    cp -f "$src_plain" "$STAGED_GRIB_DIR/${selected_cycle}.${ff}.grib2"
+    copied=$((copied + 1))
+  elif [[ -f "$src_grib2" ]]; then
+    cp -f "$src_grib2" "$STAGED_GRIB_DIR/${selected_cycle}.${ff}.grib2"
+    copied=$((copied + 1))
+  else
+    echo "Missing required lead file for cycle $selected_cycle: ig-is_${member}[.grib2]" >&2
+    exit 1
   fi
 done
-if [[ "$copied" -eq 0 ]]; then
-  echo "No GRIB leads copied for cycle $selected_cycle" >&2
+if [[ "$copied" -ne $((HORIZON_HOURS + 1)) ]]; then
+  echo "Expected $((HORIZON_HOURS + 1)) leads, copied $copied" >&2
   exit 1
 fi
 echo "Staged files: $copied"
