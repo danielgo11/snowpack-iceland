@@ -18,3 +18,17 @@ Defaults:
 - latest 00Z cycle
 - 48h horizon
 - output copy to `/imo/vinnugogn/ofanflod/verk/vakt/snowpack`
+
+## Pull GRIBs only (separate from extraction)
+
+Use:
+
+```bash
+python3 scripts/pull_harmonie_gribs.py --mode daily
+```
+
+Backfill example:
+
+```bash
+python3 scripts/pull_harmonie_gribs.py --mode backfill --start-date 2026-09-01 --end-date 2027-07-01
+```
