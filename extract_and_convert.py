@@ -16,9 +16,10 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 MISSING_VALUE = -999.0
 RETRY_ATTEMPTS = 5
 RETRY_SLEEP_SECONDS = 10
-# Operational requirement: before May 9 each year, force ISWR to zero outside daylight hours.
-# From May 9 onward, use model ISWR values as-is.
+# Operational requirement: force ISWR to zero outside daylight hours
+# during the snow season window (Sep 1 -> May 8, inclusive).
 DAYLIGHT_FORCE_CUTOFF = (5, 9)
+DAYLIGHT_FORCE_START = (9, 1)
 pygrib = None
 Observer = None
 sun = None
@@ -211,12 +212,16 @@ def compute_wind_speed_direction(u: Optional[float], v: Optional[float]) -> Tupl
     return speed, direction
 
 
+def is_daylight_forcing_season(timestamp: datetime) -> bool:
+    month_day = (timestamp.month, timestamp.day)
+    return month_day >= DAYLIGHT_FORCE_START or month_day < DAYLIGHT_FORCE_CUTOFF
+
+
 def daylight_forced_iswr(site: Site, timestamp: datetime, iswr: Optional[float], daylight_cache: Dict[Tuple[str, date], Tuple[datetime, datetime]]) -> Optional[float]:
     if iswr is None:
         return None
 
-    cutoff_dt = datetime(timestamp.year, DAYLIGHT_FORCE_CUTOFF[0], DAYLIGHT_FORCE_CUTOFF[1], tzinfo=timezone.utc)
-    if timestamp >= cutoff_dt:
+    if not is_daylight_forcing_season(timestamp):
         return iswr
 
     cache_key = (site.name, timestamp.date())
