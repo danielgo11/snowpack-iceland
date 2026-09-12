@@ -1,0 +1,27 @@
+SMET 1.1 ASCII
+
+[HEADER]
+station_id       = 4
+station_name     = oddskard
+latitude         = 65.0680046
+longitude        = -13.9022296
+altitude         = 613.2
+SlopeAngle       = 0
+SlopeAzi         = 0
+ProfileDate      = 2025-09-01T00:00:00
+tz               = 0
+nodata           = -999
+HS_Last          = 0
+nSoilLayerData   = 0
+nSnowLayerData   = 0
+SoilAlbedo       = 0.15
+BareSoil_z0      = 0.2
+CanopyHeight     = 0
+CanopyLeafAreaIndex = 0
+CanopyDirectThroughfall = 1
+WindScalingFactor = 1
+ErosionLevel     = 0
+TimeCountDeltaHS = 0
+fields = timestamp Layer_Thick T Vol_Frac_I Vol_Frac_W Vol_Frac_V Vol_Frac_S Rho_S Conduc_S HeatCapac_S rg rb dd sp mk mass_hoar ne CDot metamo
+
+[DATA]
