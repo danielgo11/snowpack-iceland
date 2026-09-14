@@ -8,8 +8,9 @@ import math
 import time
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from statistics import median
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 
@@ -20,6 +21,7 @@ RETRY_SLEEP_SECONDS = 10
 # during the snow season window (Sep 1 -> May 8, inclusive).
 DAYLIGHT_FORCE_CUTOFF = (5, 9)
 DAYLIGHT_FORCE_START = (9, 1)
+PSUM_SMOOTHING_SITES = {"vestfj"}
 pygrib = None
 Observer = None
 sun = None
@@ -276,6 +278,44 @@ def derive_output_fields(site: Site, timestamp: datetime, row: Dict[str, float],
     }
 
 
+def smooth_psum_timeseries(rows: Dict[datetime, Dict[str, Optional[float]]], window_radius: int = 2) -> Dict[datetime, Dict[str, Optional[float]]]:
+    sorted_timestamps = sorted(rows.keys())
+    if len(sorted_timestamps) > 1:
+        step = timedelta(hours=1)
+        if any((sorted_timestamps[i] - sorted_timestamps[i - 1]) != step for i in range(1, len(sorted_timestamps))):
+            return rows
+
+    raw_values: List[Optional[float]] = []
+    for ts in sorted_timestamps:
+        value = rows[ts].get("PSUM")
+        if value is None:
+            raw_values.append(None)
+        else:
+            raw_values.append(max(0.0, value))
+
+    smoothed_values: List[Optional[float]] = []
+    for i, value in enumerate(raw_values):
+        if value is None:
+            smoothed_values.append(None)
+            continue
+        window = [
+            x
+            for x in raw_values[max(0, i - window_radius) : min(len(raw_values), i + window_radius + 1)]
+            if x is not None
+        ]
+        smoothed_values.append(median(window) if window else value)
+
+    original_sum = sum(v for v in raw_values if v is not None)
+    smoothed_sum = sum(v for v in smoothed_values if v is not None)
+    if smoothed_sum > 0.0:
+        scale = original_sum / smoothed_sum
+        smoothed_values = [None if v is None else v * scale for v in smoothed_values]
+
+    for ts, value in zip(sorted_timestamps, smoothed_values):
+        rows[ts]["PSUM"] = value
+    return rows
+
+
 def format_value(value: Optional[float]) -> str:
     if value is None or (isinstance(value, float) and math.isnan(value)):
         return "-999"
@@ -395,6 +435,9 @@ def main() -> None:
         derived_rows: Dict[datetime, Dict[str, Optional[float]]] = {}
         for timestamp, row in sorted(site_rows.get(site_name, {}).items()):
             derived_rows[timestamp] = derive_output_fields(site, timestamp, row, daylight_cache)
+
+        if site_name in PSUM_SMOOTHING_SITES:
+            derived_rows = smooth_psum_timeseries(derived_rows)
 
         outpath = smet_dir / f"{site_name}.smet"
         output_counts[site_name] = write_smet(site, derived_rows, outpath)
