@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import bisect
 import math
 import time
 from collections import defaultdict
@@ -42,6 +43,12 @@ TARGET_VARIABLES = {
     "ulwrf": "ulwrf",
     "nlwrf": "nlwrf",
     "z": "z",
+}
+
+RADIATION_PARAMETER_MAP = {
+    "downward short-wave radiation flux": "dswrf",
+    "upward long-wave radiation flux": "ulwrf",
+    "net long-wave radiation flux": "nlwrf",
 }
 
 
@@ -132,6 +139,30 @@ def _safe_grid_value(values: Any, x: int, y: int) -> Optional[float]:
     return fval
 
 
+def _parse_run_and_lead(filepath: Path) -> Tuple[Optional[str], Optional[int]]:
+    stem = filepath.name
+    try:
+        # Expected: prefix_YYYYMMDDHH.FF.grib2
+        token = stem.split("_", 1)[1].replace(".grib2", "")
+        run_id, lead_str = token.split(".", 1)
+        return run_id, int(lead_str)
+    except (IndexError, ValueError):
+        return None, None
+
+
+def _resolve_var_name(grb: Any) -> Optional[str]:
+    short_name = getattr(grb, "shortName", None)
+    if short_name in TARGET_VARIABLES:
+        return TARGET_VARIABLES[short_name]
+
+    step_type = str(getattr(grb, "stepType", "") or "").strip().lower()
+    parameter_name = str(getattr(grb, "parameterName", "") or "").strip().lower()
+    if step_type == "accum" and parameter_name in RADIATION_PARAMETER_MAP:
+        return RADIATION_PARAMETER_MAP[parameter_name]
+
+    return None
+
+
 def _read_grib_with_retries(filepath: Path):
     last_error = None
     for attempt in range(1, RETRY_ATTEMPTS + 1):
@@ -147,14 +178,14 @@ def _read_grib_with_retries(filepath: Path):
 
 def extract_rows_from_file(filepath: Path) -> Dict[str, Dict[datetime, Dict[str, float]]]:
     per_file_rows: Dict[str, Dict[datetime, Dict[str, float]]] = defaultdict(dict)
+    run_id, lead_hour = _parse_run_and_lead(filepath)
     grbs = _read_grib_with_retries(filepath)
     try:
         for grb in grbs:
-            short_name = getattr(grb, "shortName", None)
-            if short_name not in TARGET_VARIABLES:
+            var_name = _resolve_var_name(grb)
+            if var_name is None:
                 continue
 
-            var_name = TARGET_VARIABLES[short_name]
             valid_date = getattr(grb, "validDate", None)
             if valid_date is None:
                 continue
@@ -164,6 +195,10 @@ def extract_rows_from_file(filepath: Path) -> Dict[str, Dict[datetime, Dict[str,
                 site_rows = per_file_rows[site.name]
                 row = dict(site_rows.get(timestamp, {}))
                 row[var_name] = _safe_grid_value(values, site.x, site.y)
+                if run_id is not None:
+                    row["__run_id"] = run_id
+                if lead_hour is not None:
+                    row["__lead_hour"] = lead_hour
                 site_rows[timestamp] = row
     finally:
         grbs.close()
@@ -181,14 +216,45 @@ def apply_base_conversions(row: Dict[str, float]) -> Dict[str, float]:
         if out.get(key) is not None:
             out[key] = out[key] * 3600.0
 
-    for key in ("dswrf", "ulwrf", "nlwrf"):
-        if out.get(key) is not None and out[key] > 2000.0:
-            out[key] = out[key] / 3600.0
-
     if out.get("z") is not None:
         out["z"] = out["z"] / 9.81
 
     return out
+
+
+def deaccumulate_radiation(site_rows: Dict[str, Dict[datetime, Dict[str, float]]]) -> Dict[str, Dict[datetime, Dict[str, float]]]:
+    radiation_keys = ("dswrf", "ulwrf", "nlwrf")
+
+    for site_name, rows in site_rows.items():
+        grouped: Dict[str, List[Tuple[int, datetime, Dict[str, float]]]] = defaultdict(list)
+        for timestamp, row in rows.items():
+            run_id = row.get("__run_id")
+            lead = row.get("__lead_hour")
+            group_key = str(run_id) if run_id is not None else f"timestamp:{timestamp.isoformat()}"
+            sort_lead = int(lead) if lead is not None else 10**9
+            grouped[group_key].append((sort_lead, timestamp, row))
+
+        for entries in grouped.values():
+            entries.sort(key=lambda item: (item[0], item[1]))
+            for key in radiation_keys:
+                prev_raw: Optional[float] = None
+                for _, _, row in entries:
+                    current_raw = row.get(key)
+                    if current_raw is None:
+                        prev_raw = None
+                        continue
+                    if prev_raw is None:
+                        value = current_raw
+                    else:
+                        value = current_raw - prev_raw
+                    prev_raw = current_raw
+                    if value < 0.0:
+                        value = 0.0
+                    if value > 2000.0:
+                        value = value / 3600.0
+                    row[key] = value
+
+    return site_rows
 
 
 def compute_relative_humidity(temp_k: Optional[float], q: Optional[float], pressure_pa: Optional[float]) -> Optional[float]:
@@ -316,6 +382,30 @@ def smooth_psum_timeseries(rows: Dict[datetime, Dict[str, Optional[float]]], win
     return rows
 
 
+def fill_missing_ilwr_nearest(rows: Dict[datetime, Dict[str, Optional[float]]]) -> Dict[datetime, Dict[str, Optional[float]]]:
+    sorted_timestamps = sorted(rows.keys())
+    valid_timestamps = [ts for ts in sorted_timestamps if rows[ts].get("ILWR") is not None]
+    if not valid_timestamps:
+        return rows
+
+    for timestamp in sorted_timestamps:
+        if rows[timestamp].get("ILWR") is not None:
+            continue
+        idx = bisect.bisect_left(valid_timestamps, timestamp)
+        candidates: List[Tuple[float, datetime]] = []
+        if idx > 0:
+            prev_ts = valid_timestamps[idx - 1]
+            candidates.append((abs((timestamp - prev_ts).total_seconds()), prev_ts))
+        if idx < len(valid_timestamps):
+            next_ts = valid_timestamps[idx]
+            candidates.append((abs((next_ts - timestamp).total_seconds()), next_ts))
+        if not candidates:
+            continue
+        _, best_ts = min(candidates, key=lambda item: item[0])
+        rows[timestamp]["ILWR"] = rows[best_ts].get("ILWR")
+    return rows
+
+
 def format_value(value: Optional[float]) -> str:
     if value is None or (isinstance(value, float) and math.isnan(value)):
         return "-999"
@@ -426,6 +516,7 @@ def main() -> None:
         raise SystemExit(f"No .grib2 files found in {grib_dir}")
 
     site_rows, skipped_files, processed_count = process_grib_files(grib_files)
+    site_rows = deaccumulate_radiation(site_rows)
     site_rows = align_timestamps(site_rows)
 
     daylight_cache: Dict[Tuple[str, date], Tuple[datetime, datetime]] = {}
@@ -435,6 +526,8 @@ def main() -> None:
         derived_rows: Dict[datetime, Dict[str, Optional[float]]] = {}
         for timestamp, row in sorted(site_rows.get(site_name, {}).items()):
             derived_rows[timestamp] = derive_output_fields(site, timestamp, row, daylight_cache)
+
+        derived_rows = fill_missing_ilwr_nearest(derived_rows)
 
         if site_name in PSUM_SMOOTHING_SITES:
             derived_rows = smooth_psum_timeseries(derived_rows)
