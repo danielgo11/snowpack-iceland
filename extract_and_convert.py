@@ -51,6 +51,11 @@ RADIATION_PARAMETER_MAP = {
     "net long-wave radiation flux": "nlwrf",
 }
 
+PRECIP_PARAMETER_KEYWORDS: Dict[str, Tuple[str, ...]] = {
+    "tsrwe": ("snow", "water", "rate"),
+    "rprate": ("rain", "rate"),
+}
+
 
 @dataclass(frozen=True)
 class Site:
@@ -159,6 +164,9 @@ def _resolve_var_name(grb: Any) -> Optional[str]:
     parameter_name = str(getattr(grb, "parameterName", "") or "").strip().lower()
     if step_type == "accum" and parameter_name in RADIATION_PARAMETER_MAP:
         return RADIATION_PARAMETER_MAP[parameter_name]
+    for mapped_name, keywords in PRECIP_PARAMETER_KEYWORDS.items():
+        if all(keyword in parameter_name for keyword in keywords):
+            return mapped_name
 
     return None
 
