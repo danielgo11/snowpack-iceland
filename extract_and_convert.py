@@ -314,7 +314,7 @@ def daylight_forced_iswr(site: Site, timestamp: datetime, iswr: Optional[float],
         daylight_cache[cache_key] = (sunrise, sunset)
 
     sunrise, sunset = daylight_cache[cache_key]
-    if timestamp < sunrise or timestamp > sunset:
+    if timestamp < sunrise or timestamp >= sunset:
         return 0.0
     return iswr
 
