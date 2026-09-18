@@ -52,6 +52,7 @@ Useful toggles for iteration:
 - `--include-graupel` with `--graupel-factor`
 - `--disable-daylight-forcing`
 - `--disable-psum-smoothing` or `--smooth-psum-sites`
+- `--disable-seasonal-summary`
 
 ## Hybrid daily operational run
 

@@ -76,6 +76,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--disable-radiation-deaccum", action="store_true", help="Use raw radiation values directly")
     parser.add_argument("--radiation-scale-threshold", type=float, default=2000.0, help="If diff exceeds this, divide by 3600")
     parser.add_argument("--no-align", action="store_true", help="Do not enforce cross-site timestamp alignment")
+    parser.add_argument("--disable-seasonal-summary", action="store_true", help="Disable Oct-Feb / Mar-May summary printout")
     return parser.parse_args()
 
 
@@ -524,13 +525,14 @@ def main() -> None:
         output_counts[site_name] = write_smet(site, derived_rows, outpath)
         print(f"Rows written ({site_name}): {output_counts[site_name]}")
 
-        season = seasonal_summary(derived_rows)
-        for label in ("Oct-Feb", "Mar-May"):
-            rows_n, precip_h, psum_sum, cold_h, cold_psum = season[label]
-            print(
-                f"{site_name} {label}: rows={rows_n} precip_h={precip_h} "
-                f"PSUM={psum_sum:.3f} cold_h={cold_h} cold_PSUM={cold_psum:.3f}"
-            )
+        if not args.disable_seasonal_summary:
+            season = seasonal_summary(derived_rows)
+            for label in ("Oct-Feb", "Mar-May"):
+                rows_n, precip_h, psum_sum, cold_h, cold_psum = season[label]
+                print(
+                    f"{site_name} {label}: rows={rows_n} precip_h={precip_h} "
+                    f"PSUM={psum_sum:.3f} cold_h={cold_h} cold_PSUM={cold_psum:.3f}"
+                )
 
 
 if __name__ == "__main__":
