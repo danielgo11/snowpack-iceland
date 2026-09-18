@@ -33,6 +33,26 @@ Backfill example:
 python3 scripts/pull_harmonie_gribs.py --mode backfill --start-date 2026-09-01 --end-date 2027-07-01
 ```
 
+## Two-stage forecast forcing workflow (fast iteration)
+
+1) One-time raw extraction from GRIB:
+
+```bash
+python3 extract_grib_raw.py --grib-dir data/grib --out-dir data/raw
+```
+
+2) Fast conversion/tuning from raw CSV to SMET:
+
+```bash
+python3 convert_raw_to_smet.py --raw-dir data/raw --smet-dir data/smet
+```
+
+Useful toggles for iteration:
+- `--rain-factor`, `--snow-factor`
+- `--include-graupel` with `--graupel-factor`
+- `--disable-daylight-forcing`
+- `--disable-psum-smoothing` or `--smooth-psum-sites`
+
 ## Hybrid daily operational run
 
 Hybrid runner script:
