@@ -322,7 +322,6 @@ def derive_output_fields(
         "PSUM": psum,
         "ISWR": iswr,
         "ILWR": ilwr,
-        "HS_MOD": row.get("z") / 9.81 if row.get("z") is not None else None,
     }
 
 
