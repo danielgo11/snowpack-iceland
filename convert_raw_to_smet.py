@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from statistics import median
-from typing import Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 
 MISSING_VALUE = -999.0
@@ -134,11 +134,11 @@ def parse_optional_int(value: Optional[str]) -> Optional[int]:
         return None
 
 
-def _complete_count(row: Dict[str, Optional[float]]) -> int:
+def _complete_count(row: Dict[str, Any]) -> int:
     return sum(1 for key in RAW_FIELDS if row.get(key) is not None)
 
 
-def _pick_best_row(existing: Dict[str, Optional[float]], candidate: Dict[str, Optional[float]]) -> Dict[str, Optional[float]]:
+def _pick_best_row(existing: Dict[str, Any], candidate: Dict[str, Any]) -> Dict[str, Any]:
     existing_count = _complete_count(existing)
     candidate_count = _complete_count(candidate)
     winner = dict(candidate) if candidate_count > existing_count else dict(existing)
@@ -149,8 +149,8 @@ def _pick_best_row(existing: Dict[str, Optional[float]], candidate: Dict[str, Op
     return winner
 
 
-def load_raw_csv(path: Path) -> Dict[datetime, Dict[str, Optional[float]]]:
-    rows: Dict[datetime, Dict[str, Optional[float]]] = {}
+def load_raw_csv(path: Path) -> Dict[datetime, Dict[str, Any]]:
+    rows: Dict[datetime, Dict[str, Any]] = {}
     with path.open(newline="", encoding="utf-8") as fh:
         reader = csv.DictReader(fh)
         for record in reader:
@@ -160,12 +160,12 @@ def load_raw_csv(path: Path) -> Dict[datetime, Dict[str, Optional[float]]]:
             else:
                 timestamp = timestamp.astimezone(timezone.utc)
 
-            row: Dict[str, Optional[float]] = {
+            row: Dict[str, Any] = {
                 field: parse_optional_float(record.get(field))
                 for field in RAW_FIELDS
             }
-            row["run_id"] = record.get("run_id")  # type: ignore[assignment]
-            row["lead_hour"] = parse_optional_int(record.get("lead_hour"))  # type: ignore[assignment]
+            row["run_id"] = record.get("run_id")
+            row["lead_hour"] = parse_optional_int(record.get("lead_hour"))
 
             existing = rows.get(timestamp)
             if existing is None:
@@ -175,14 +175,14 @@ def load_raw_csv(path: Path) -> Dict[datetime, Dict[str, Optional[float]]]:
     return rows
 
 
-def align_timestamps(site_rows: Dict[str, Dict[datetime, Dict[str, Optional[float]]]]) -> Dict[str, Dict[datetime, Dict[str, Optional[float]]]]:
+def align_timestamps(site_rows: Dict[str, Dict[datetime, Dict[str, Any]]]) -> Dict[str, Dict[datetime, Dict[str, Any]]]:
     common_timestamps: Optional[Set[datetime]] = None
     for site_name in SITES:
         timestamps = set(site_rows.get(site_name, {}).keys())
         common_timestamps = timestamps if common_timestamps is None else (common_timestamps & timestamps)
     common_timestamps = common_timestamps or set()
 
-    aligned: Dict[str, Dict[datetime, Dict[str, Optional[float]]]] = {}
+    aligned: Dict[str, Dict[datetime, Dict[str, Any]]] = {}
     for site_name in SITES:
         aligned[site_name] = {
             ts: row
@@ -192,10 +192,10 @@ def align_timestamps(site_rows: Dict[str, Dict[datetime, Dict[str, Optional[floa
     return aligned
 
 
-def deaccumulate_radiation(site_rows: Dict[str, Dict[datetime, Dict[str, Optional[float]]]], threshold: float) -> Dict[str, Dict[datetime, Dict[str, Optional[float]]]]:
+def deaccumulate_radiation(site_rows: Dict[str, Dict[datetime, Dict[str, Any]]], threshold: float) -> Dict[str, Dict[datetime, Dict[str, Any]]]:
     radiation_keys = ("dswrf", "ulwrf", "nlwrf")
     for rows in site_rows.values():
-        grouped: Dict[str, List[Tuple[int, datetime, Dict[str, Optional[float]]]]] = {}
+        grouped: Dict[str, List[Tuple[int, datetime, Dict[str, Any]]]] = {}
         for timestamp, row in rows.items():
             run_id = row.get("run_id")
             lead = row.get("lead_hour")
@@ -284,7 +284,7 @@ def daylight_forced_iswr(
 def derive_output_fields(
     site: Site,
     timestamp: datetime,
-    row: Dict[str, Optional[float]],
+    row: Dict[str, Any],
     args: argparse.Namespace,
     daylight_cache: Dict[Tuple[str, date], Tuple[datetime, datetime]],
     season_start: Tuple[int, int],
@@ -460,8 +460,8 @@ def seasonal_summary(rows: Dict[datetime, Dict[str, Optional[float]]]) -> Dict[s
     return out
 
 
-def load_all_sites(raw_dir: Path) -> Dict[str, Dict[datetime, Dict[str, Optional[float]]]]:
-    site_rows: Dict[str, Dict[datetime, Dict[str, Optional[float]]]] = {}
+def load_all_sites(raw_dir: Path) -> Dict[str, Dict[datetime, Dict[str, Any]]]:
+    site_rows: Dict[str, Dict[datetime, Dict[str, Any]]] = {}
     for site_name in SITES:
         csv_path = raw_dir / f"{site_name}_raw.csv"
         if not csv_path.exists():
