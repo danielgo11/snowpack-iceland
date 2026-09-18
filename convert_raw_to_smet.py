@@ -240,6 +240,8 @@ def compute_wind_speed_direction(u: Optional[float], v: Optional[float]) -> Tupl
 
 def is_daylight_forcing_season(timestamp: datetime, start: Tuple[int, int], cutoff: Tuple[int, int]) -> bool:
     month_day = (timestamp.month, timestamp.day)
+    if start <= cutoff:
+        return start <= month_day < cutoff
     return month_day >= start or month_day < cutoff
 
 
