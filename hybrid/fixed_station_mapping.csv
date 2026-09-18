@@ -1,0 +1,5 @@
+forecast_site,forecast_station_id,forecast_latitude,forecast_longitude,forecast_altitude_m,obs_sensor_id,obs_name,obs_latitude,obs_longitude,obs_altitude_m,distance_km
+vestfj,1,65.928064,-23.136375,651.6,206,"Súðavíkurhlíð gil 22 503mh,SU22",66.055519,-23.004448,503.0,15.378
+nord,2,65.995650,-18.648705,730.4,232,"Dalvík, Bæjarfjall, 730mh,DBFJ",65.992607,-18.580608,730.0,3.099
+austfj,3,65.303028,-14.086696,767.1,72,"Seyðisfj. Bjólfur, 540 mh,SEY2",65.267708,-14.034565,540.0,4.615
+oddskard,4,65.068005,-13.902230,613.2,143,"Eskifj. Harðskafi, 570 mh,ESKI",65.093262,-14.019261,570.0,6.160
