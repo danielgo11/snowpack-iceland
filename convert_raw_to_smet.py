@@ -100,6 +100,10 @@ def parse_month_day(value: str) -> Tuple[int, int]:
         raise SystemExit(f"Invalid MM-DD value: {value}") from exc
     if not (1 <= month <= 12 and 1 <= day <= 31):
         raise SystemExit(f"Invalid MM-DD value: {value}")
+    try:
+        datetime(2001, month, day)
+    except ValueError as exc:
+        raise SystemExit(f"Invalid MM-DD value: {value}") from exc
     return month, day
 
 
