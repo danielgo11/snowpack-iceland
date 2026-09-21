@@ -75,6 +75,23 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--disable-radiation-deaccum", action="store_true", help="Use raw radiation values directly")
     parser.add_argument("--radiation-scale-threshold", type=float, default=2000.0, help="If diff exceeds this, divide by 3600")
+    parser.add_argument("--psum-smoothing-window-radius", type=int, default=2, help="Median smoothing half-window in timesteps")
+    parser.add_argument("--conditional-psum-cap", type=float, default=None, help="Conservative PSUM cap (kg/m2/hr) with redistribution")
+    parser.add_argument(
+        "--conditional-psum-cap-sites",
+        default="vestfj",
+        help="Comma-separated site names to apply conditional PSUM cap to",
+    )
+    parser.add_argument(
+        "--conditional-psum-start",
+        default=None,
+        help="Optional ISO8601 UTC start timestamp for cap window (e.g. 2025-12-20T00:00:00)",
+    )
+    parser.add_argument(
+        "--conditional-psum-end",
+        default=None,
+        help="Optional ISO8601 UTC end timestamp for cap window (exclusive)",
+    )
     parser.add_argument("--no-align", action="store_true", help="Do not enforce cross-site timestamp alignment")
     parser.add_argument("--disable-seasonal-summary", action="store_true", help="Disable Oct-Feb / Mar-May summary printout")
     return parser.parse_args()
@@ -133,6 +150,18 @@ def parse_optional_int(value: Optional[str]) -> Optional[int]:
         return int(float(text))
     except ValueError:
         return None
+
+
+def parse_optional_timestamp(value: Optional[str], flag_name: str) -> Optional[datetime]:
+    if value is None:
+        return None
+    try:
+        timestamp = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise SystemExit(f"Invalid timestamp for {flag_name}: {value}") from exc
+    if timestamp.tzinfo is None:
+        return timestamp.replace(tzinfo=timezone.utc)
+    return timestamp.astimezone(timezone.utc)
 
 
 def _complete_count(row: Dict[str, Any]) -> int:
@@ -363,6 +392,61 @@ def smooth_psum_timeseries(rows: Dict[datetime, Dict[str, Optional[float]]], win
     return rows
 
 
+def apply_conditional_psum_cap(
+    rows: Dict[datetime, Dict[str, Optional[float]]],
+    cap: float,
+    start: Optional[datetime],
+    end: Optional[datetime],
+) -> Dict[datetime, Dict[str, Optional[float]]]:
+    if cap <= 0:
+        return rows
+
+    selected = [
+        ts for ts in sorted(rows.keys())
+        if (start is None or ts >= start) and (end is None or ts < end)
+    ]
+    if not selected:
+        return rows
+
+    values: List[Tuple[datetime, Optional[float]]] = [
+        (ts, rows[ts].get("PSUM")) for ts in selected
+    ]
+    capped: Dict[datetime, Optional[float]] = {}
+    overflow = 0.0
+
+    for ts, value in values:
+        if value is None:
+            capped[ts] = None
+            continue
+        bounded = max(0.0, value)
+        cval = min(bounded, cap)
+        capped[ts] = cval
+        overflow += bounded - cval
+
+    if overflow > 0.0:
+        adjustable = [ts for ts, val in capped.items() if val is not None]
+        while overflow > 1e-9 and adjustable:
+            capacities = {ts: max(0.0, cap - float(capped[ts])) for ts in adjustable}
+            total_capacity = sum(capacities.values())
+            if total_capacity <= 1e-9:
+                break
+            for ts in adjustable:
+                space = capacities[ts]
+                if space <= 0.0:
+                    continue
+                add = min(space, overflow * (space / total_capacity))
+                capped[ts] = float(capped[ts]) + add
+                overflow -= add
+            adjustable = [ts for ts in adjustable if capped[ts] is not None and float(capped[ts]) < cap - 1e-9]
+
+    if overflow > 1e-6:
+        print(f"Warning: conditional PSUM cap dropped {overflow:.3f} kg/m2/hr due to insufficient in-window capacity.")
+
+    for ts in selected:
+        rows[ts]["PSUM"] = capped[ts]
+    return rows
+
+
 def fill_missing_ilwr_nearest(rows: Dict[datetime, Dict[str, Optional[float]]]) -> Dict[datetime, Dict[str, Optional[float]]]:
     sorted_timestamps = sorted(rows.keys())
     valid_timestamps = [ts for ts in sorted_timestamps if rows[ts].get("ILWR") is not None]
@@ -471,11 +555,11 @@ def load_all_sites(raw_dir: Path) -> Dict[str, Dict[datetime, Dict[str, Any]]]:
     return site_rows
 
 
-def parse_site_set(value: str) -> Set[str]:
+def parse_site_set(value: str, flag_name: str) -> Set[str]:
     names = {item.strip() for item in value.split(",") if item.strip()}
     invalid = names - set(SITES.keys())
     if invalid:
-        raise SystemExit(f"Unknown site(s) in --smooth-psum-sites: {', '.join(sorted(invalid))}")
+        raise SystemExit(f"Unknown site(s) in {flag_name}: {', '.join(sorted(invalid))}")
     return names
 
 
@@ -488,7 +572,12 @@ def main() -> None:
 
     season_start = parse_month_day(args.daylight_season_start)
     season_cutoff = parse_month_day(args.daylight_season_cutoff)
-    smooth_sites = parse_site_set(args.smooth_psum_sites) if not args.disable_psum_smoothing else set()
+    smooth_sites = parse_site_set(args.smooth_psum_sites, "--smooth-psum-sites") if not args.disable_psum_smoothing else set()
+    cap_sites = parse_site_set(args.conditional_psum_cap_sites, "--conditional-psum-cap-sites") if args.conditional_psum_cap is not None else set()
+    cap_start = parse_optional_timestamp(args.conditional_psum_start, "--conditional-psum-start")
+    cap_end = parse_optional_timestamp(args.conditional_psum_end, "--conditional-psum-end")
+    if cap_start and cap_end and cap_end <= cap_start:
+        raise SystemExit("--conditional-psum-end must be after --conditional-psum-start")
 
     if not args.disable_daylight_forcing:
         require_astral()
@@ -519,7 +608,14 @@ def main() -> None:
 
         derived_rows = fill_missing_ilwr_nearest(derived_rows)
         if site_name in smooth_sites:
-            derived_rows = smooth_psum_timeseries(derived_rows)
+            derived_rows = smooth_psum_timeseries(derived_rows, window_radius=max(0, args.psum_smoothing_window_radius))
+        if site_name in cap_sites and args.conditional_psum_cap is not None:
+            derived_rows = apply_conditional_psum_cap(
+                derived_rows,
+                cap=float(args.conditional_psum_cap),
+                start=cap_start,
+                end=cap_end,
+            )
 
         outpath = smet_dir / f"{site_name}.smet"
         output_counts[site_name] = write_smet(site, derived_rows, outpath)
