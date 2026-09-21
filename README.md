@@ -52,7 +52,33 @@ Useful toggles for iteration:
 - `--include-graupel` with `--graupel-factor`
 - `--disable-daylight-forcing`
 - `--disable-psum-smoothing` or `--smooth-psum-sites`
+- `--psum-smoothing-window-radius`
+- `--conditional-psum-cap` with optional `--conditional-psum-start` / `--conditional-psum-end`
 - `--disable-seasonal-summary`
+
+## Structured stabilization workflow (vestfj / expert INI strategy)
+
+Run the stabilization matrix with frozen baseline/reference cases and one-axis A/B tests:
+
+```bash
+python3 scripts/run_stabilization_plan.py \
+  --raw-dir data/raw \
+  --ini-template /absolute/path/to/vestfj.ini \
+  --start 2025-09-01T00:00 \
+  --end 2026-07-01T00:00
+```
+
+What it does:
+- rebuilds canonical baseline forcing from raw data (no manual SMET edits)
+- creates two reference cases (`stable_empty_reference`, `unstable_with_snow_reference`)
+- applies expert debugging defaults in per-case INI files (15 min step, pressure scaling filter, processed meteo + flux outputs, generator/input-editing settings)
+- runs one-axis matrix tests (timestep, stability mode, PSUM handling, smoothing radius)
+- writes a summary CSV with:
+  - first failure timestamp
+  - top-node temperature (if present in logs)
+  - total PSUM and cold-season PSUM
+  - whether snow appears in PRO
+  - acceptance criteria flag
 
 ## Hybrid daily operational run
 
