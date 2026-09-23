@@ -60,6 +60,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Convert raw GRIB-extracted CSV data to SMET.")
     parser.add_argument("--raw-dir", default="data/raw", help="Directory with *_raw.csv files")
     parser.add_argument("--smet-dir", default="data/smet", help="Directory to write SMET files")
+    parser.add_argument(
+        "--sites",
+        default="vestfj,nord,austfj,oddskard",
+        help="Comma-separated site names to process (default: all sites)",
+    )
     parser.add_argument("--rain-factor", type=float, default=3600.0, help="Multiplier for rprate")
     parser.add_argument("--snow-factor", type=float, default=3600.0, help="Multiplier for tsrwe")
     parser.add_argument("--include-graupel", action="store_true", help="Include graupel_rate in PSUM")
@@ -205,15 +210,18 @@ def load_raw_csv(path: Path) -> Dict[datetime, Dict[str, Any]]:
     return rows
 
 
-def align_timestamps(site_rows: Dict[str, Dict[datetime, Dict[str, Any]]]) -> Dict[str, Dict[datetime, Dict[str, Any]]]:
+def align_timestamps(
+    site_rows: Dict[str, Dict[datetime, Dict[str, Any]]],
+    selected_sites: Iterable[str],
+) -> Dict[str, Dict[datetime, Dict[str, Any]]]:
     common_timestamps: Optional[Set[datetime]] = None
-    for site_name in SITES:
+    for site_name in selected_sites:
         timestamps = set(site_rows.get(site_name, {}).keys())
         common_timestamps = timestamps if common_timestamps is None else (common_timestamps & timestamps)
     common_timestamps = common_timestamps or set()
 
     aligned: Dict[str, Dict[datetime, Dict[str, Any]]] = {}
-    for site_name in SITES:
+    for site_name in selected_sites:
         aligned[site_name] = {
             ts: row
             for ts, row in site_rows.get(site_name, {}).items()
@@ -545,9 +553,9 @@ def seasonal_summary(rows: Dict[datetime, Dict[str, Optional[float]]]) -> Dict[s
     return out
 
 
-def load_all_sites(raw_dir: Path) -> Dict[str, Dict[datetime, Dict[str, Any]]]:
+def load_all_sites(raw_dir: Path, selected_sites: Iterable[str]) -> Dict[str, Dict[datetime, Dict[str, Any]]]:
     site_rows: Dict[str, Dict[datetime, Dict[str, Any]]] = {}
-    for site_name in SITES:
+    for site_name in selected_sites:
         csv_path = raw_dir / f"{site_name}_raw.csv"
         if not csv_path.exists():
             raise SystemExit(f"Missing raw CSV: {csv_path}")
@@ -572,8 +580,17 @@ def main() -> None:
 
     season_start = parse_month_day(args.daylight_season_start)
     season_cutoff = parse_month_day(args.daylight_season_cutoff)
-    smooth_sites = parse_site_set(args.smooth_psum_sites, "--smooth-psum-sites") if not args.disable_psum_smoothing else set()
-    cap_sites = parse_site_set(args.conditional_psum_cap_sites, "--conditional-psum-cap-sites") if args.conditional_psum_cap is not None else set()
+    selected_sites = sorted(parse_site_set(args.sites, "--sites"))
+    smooth_sites = (
+        parse_site_set(args.smooth_psum_sites, "--smooth-psum-sites") & set(selected_sites)
+        if not args.disable_psum_smoothing
+        else set()
+    )
+    cap_sites = (
+        parse_site_set(args.conditional_psum_cap_sites, "--conditional-psum-cap-sites") & set(selected_sites)
+        if args.conditional_psum_cap is not None
+        else set()
+    )
     cap_start = parse_optional_timestamp(args.conditional_psum_start, "--conditional-psum-start")
     cap_end = parse_optional_timestamp(args.conditional_psum_end, "--conditional-psum-end")
     if cap_start and cap_end and cap_end <= cap_start:
@@ -582,18 +599,19 @@ def main() -> None:
     if not args.disable_daylight_forcing:
         require_astral()
 
-    site_rows = load_all_sites(raw_dir)
+    site_rows = load_all_sites(raw_dir, selected_sites=selected_sites)
     if not args.disable_radiation_deaccum:
         site_rows = deaccumulate_radiation(site_rows, threshold=args.radiation_scale_threshold)
     if not args.no_align:
-        site_rows = align_timestamps(site_rows)
+        site_rows = align_timestamps(site_rows, selected_sites=selected_sites)
 
     daylight_cache: Dict[Tuple[str, date], Tuple[datetime, datetime]] = {}
     output_counts: Dict[str, int] = {}
 
     print("\nSummary")
     print("-------")
-    for site_name, site in SITES.items():
+    for site_name in selected_sites:
+        site = SITES[site_name]
         derived_rows: Dict[datetime, Dict[str, Optional[float]]] = {}
         for timestamp, row in sorted(site_rows.get(site_name, {}).items()):
             derived_rows[timestamp] = derive_output_fields(
